@@ -52,6 +52,10 @@ def preprocess_garment_image(
         if image.ndim == 3:
             image = image.unsqueeze(0)
         
+        # Handle ComfyUI format [B, H, W, C] -> [B, C, H, W]
+        if image.ndim == 4 and image.shape[-1] == 3:
+            image = image.permute(0, 3, 1, 2)
+        
         # Ensure float
         image = image.float()
         

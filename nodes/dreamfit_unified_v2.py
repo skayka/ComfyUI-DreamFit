@@ -368,20 +368,18 @@ class DreamFitUnifiedV2:
             # Return minimal debug image if not in debug mode
             return original_garment
         
-        # Create 2x2 grid
-        device = processed_garment.device
+        # Handle ComfyUI format [B, H, W, C] -> [B, C, H, W]
+        if original_garment.dim() == 4 and original_garment.shape[-1] == 3:
+            original_garment = original_garment.permute(0, 3, 1, 2)
+        
+        B, C, H, W = original_garment.shape
+        device = original_garment.device
         
         # Denormalize processed garment for visualization
         mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
         std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
         processed_viz = processed_garment * std + mean
         processed_viz = processed_viz.clamp(0, 1)
-        
-        # Resize to match original size
-        B, C, H, W = original_garment.shape
-        if original_garment.dim() == 4 and C == H:  # ComfyUI format [B, H, W, C]
-            original_garment = original_garment.permute(0, 3, 1, 2)
-            B, C, H, W = original_garment.shape
         
         # Create attention heatmap
         heatmap = self._create_attention_heatmap(attention_weights, (H, W))
@@ -406,8 +404,11 @@ class DreamFitUnifiedV2:
         
         # Bottom-right: Model image or placeholder
         if model_image is not None:
-            if model_image.dim() == 4 and model_image.shape[1] == H:
+            if model_image.dim() == 4 and model_image.shape[-1] == 3:
                 model_image = model_image.permute(0, 3, 1, 2)
+            # Ensure model image matches the size
+            if model_image.shape[-2:] != (H, W):
+                model_image = F.interpolate(model_image, size=(H, W), mode='bilinear', align_corners=False)
             images.append(model_image[0])
         else:
             # Create placeholder
