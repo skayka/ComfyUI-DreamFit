@@ -4,11 +4,9 @@ Model loading and management utilities for DreamFit
 
 import os
 import hashlib
-import requests
 from pathlib import Path
 from typing import Dict, Optional, Union
 import torch
-from tqdm import tqdm
 import json
 
 # Try to import ComfyUI's folder_paths
@@ -109,6 +107,11 @@ class DreamFitModelManager:
         
         # Download with progress bar
         print(f"Downloading {model_name} ({model_info['size_mb']}MB)...")
+        try:
+            import requests
+        except ImportError:
+            raise ImportError("requests library is required for downloading models. Install with: pip install requests")
+        
         response = requests.get(model_info['url'], stream=True)
         response.raise_for_status()
         
@@ -116,10 +119,16 @@ class DreamFitModelManager:
         block_size = 8192
         
         with open(filepath, 'wb') as f:
-            with tqdm(total=total_size, unit='iB', unit_scale=True) as pbar:
+            try:
+                from tqdm import tqdm
+                with tqdm(total=total_size, unit='iB', unit_scale=True) as pbar:
+                    for chunk in response.iter_content(block_size):
+                        f.write(chunk)
+                        pbar.update(len(chunk))
+            except ImportError:
+                # Fallback without progress bar
                 for chunk in response.iter_content(block_size):
                     f.write(chunk)
-                    pbar.update(len(chunk))
         
         # Compute and store checksum
         sha256 = self._compute_sha256(filepath)

@@ -6,8 +6,6 @@ Loads DreamFit model weights for garment-centric generation
 import os
 import torch
 from pathlib import Path
-import requests
-from tqdm import tqdm
 
 from dreamfit_core.utils.model_loader import DreamFitModelManager
 
