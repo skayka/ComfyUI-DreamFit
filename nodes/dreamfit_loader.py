@@ -7,7 +7,7 @@ import os
 import torch
 from pathlib import Path
 
-from dreamfit_core.utils.model_loader import DreamFitModelManager
+from ..dreamfit_core.utils.model_loader import DreamFitModelManager
 
 class DreamFitCheckpointLoader:
     """
@@ -100,7 +100,7 @@ class DreamFitCheckpointLoader:
         }
         
         # Initialize encoder with weights
-        from dreamfit_core.models.anything_dressing_encoder import AnythingDressingEncoder
+        from ..dreamfit_core.models.anything_dressing_encoder import AnythingDressingEncoder
         encoder_config = checkpoint.get("encoder_config", {})
         encoder = AnythingDressingEncoder(encoder_config)
         

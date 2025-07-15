@@ -9,9 +9,9 @@ from typing import Dict, Any, Optional, Tuple, List
 import copy
 
 # DreamFit imports
-from dreamfit_core.models import AdaptiveAttentionInjector
-from dreamfit_core.models.adaptive_attention import InjectionConfig
-from dreamfit_core.models.lora_adapter import apply_dreamfit_lora, DreamFitLoRAAdapter
+from ..dreamfit_core.models import AdaptiveAttentionInjector
+from ..dreamfit_core.models.adaptive_attention import InjectionConfig
+from ..dreamfit_core.models.lora_adapter import apply_dreamfit_lora, DreamFitLoRAAdapter
 
 
 class DreamFitFluxAdapter:

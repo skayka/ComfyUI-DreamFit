@@ -8,9 +8,9 @@ from typing import Dict, Any, Optional, Tuple
 import numpy as np
 
 # DreamFit imports
-from dreamfit_core.models import AnythingDressingEncoder
-from dreamfit_core.models.anything_dressing_encoder import EncoderConfig
-from dreamfit_core.utils import preprocess_garment_image, PromptEnhancer
+from ..dreamfit_core.models import AnythingDressingEncoder
+from ..dreamfit_core.models.anything_dressing_encoder import EncoderConfig
+from ..dreamfit_core.utils import preprocess_garment_image, PromptEnhancer
 
 
 class DreamFitEncode:
