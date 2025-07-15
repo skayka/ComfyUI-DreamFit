@@ -8,7 +8,6 @@ from typing import Dict, Optional, Any
 import comfy.sample
 import comfy.samplers
 import comfy.model_management
-import comfy.sample_as
 import nodes
 from ..dreamfit_core.models.dreamfit_model_wrapper import DreamFitModelWrapper
 
