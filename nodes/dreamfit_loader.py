@@ -169,3 +169,15 @@ class DreamFitModelValidator:
         
         info = "\n".join(info_lines)
         return (info,)
+
+
+# Node mappings for ComfyUI
+NODE_CLASS_MAPPINGS = {
+    "DreamFitCheckpointLoader": DreamFitCheckpointLoader,
+    "DreamFitModelValidator": DreamFitModelValidator,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "DreamFitCheckpointLoader": "DreamFit Checkpoint Loader",
+    "DreamFitModelValidator": "DreamFit Model Validator",
+}
