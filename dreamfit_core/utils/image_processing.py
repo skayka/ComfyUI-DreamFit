@@ -48,13 +48,27 @@ def preprocess_garment_image(
             image = image / 255.0
     
     elif isinstance(image, torch.Tensor):
+        print(f"Input tensor shape: {image.shape}, dtype: {image.dtype}")
+        
         # Ensure 4D tensor
         if image.ndim == 3:
             image = image.unsqueeze(0)
         
         # Handle ComfyUI format [B, H, W, C] -> [B, C, H, W]
-        if image.ndim == 4 and image.shape[-1] == 3:
-            image = image.permute(0, 3, 1, 2)
+        if image.ndim == 4:
+            if image.shape[-1] == 3:  # [B, H, W, C] format
+                print(f"Converting from ComfyUI format [B, H, W, C] to [B, C, H, W]")
+                image = image.permute(0, 3, 1, 2)
+            elif image.shape[1] != 3 and image.shape[1] != 1:  # Unexpected channel count
+                print(f"Warning: Unexpected channel count: {image.shape[1]}")
+                # Try to detect if it's in wrong format
+                if image.shape[3] == 3:
+                    print(f"Image seems to already be in [B, C, H, W] format but marked as needing conversion")
+                    # Don't permute
+                else:
+                    print(f"Cannot determine correct format for shape: {image.shape}")
+        
+        print(f"After format conversion: {image.shape}")
         
         # Ensure float
         image = image.float()
@@ -64,27 +78,41 @@ def preprocess_garment_image(
             image = image / 255.0
     
     # Resize to target size
+    print(f"Before resize: shape={image.shape}, target_size={target_size}")
     if image.shape[-2:] != (target_size, target_size):
+        print(f"Resizing from {image.shape[-2:]} to ({target_size}, {target_size})")
         image = F.interpolate(
             image,
             size=(target_size, target_size),
             mode='bilinear',
             align_corners=False
         )
+        print(f"After resize: shape={image.shape}")
     
     # Normalize using ImageNet statistics
     if normalize:
         mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
         std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
         
-        if device:
+        # Move to device if specified
+        if device is not None:
             mean = mean.to(device)
             std = std.to(device)
+        
+        # Ensure the mean and std match the image device
+        if image.device != mean.device:
+            mean = mean.to(image.device)
+            std = std.to(image.device)
             
-        image = (image - mean) / std
+        # Check dimensions are compatible
+        if image.shape[1] != 3:
+            print(f"Warning: Expected 3 channels, got {image.shape[1]}. Image shape: {image.shape}")
+            # Skip normalization if channels don't match
+        else:
+            image = (image - mean) / std
     
     # Move to device if specified
-    if device:
+    if device is not None:
         image = image.to(device)
     
     return image
