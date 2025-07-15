@@ -4,6 +4,27 @@ This directory contains example workflows for using DreamFit nodes in ComfyUI.
 
 ## Available Workflows
 
+### 0. Unified Workflow (`dreamfit_unified_workflow.json`)
+**Best for:** Understanding the complete DreamFit pipeline with proper Flux loading
+
+This workflow uses the new **DreamFit Unified** node which properly integrates with Flux diffusion models.
+
+**Features:**
+- Correct Flux model loading (UNETLoader, not CheckpointLoader)
+- Dual CLIP loader for text encoding
+- Separate VAE loader
+- Debug output shows processed garment
+- Supports both basic and try-on modes
+
+**Node chain:**
+1. UNETLoader → Load Flux diffusion model
+2. DualCLIPLoader → Load CLIP models
+3. VAELoader → Load VAE
+4. CLIPTextEncode → Create conditioning
+5. DreamFitUnified → Process everything
+6. KSampler → Generate
+7. VAEDecode → Decode to image
+
 ### 1. Simple Workflow (`dreamfit_simple_workflow.json`)
 **Best for:** Quick testing and basic garment generation
 
@@ -127,7 +148,8 @@ This workflow demonstrates advanced features including model images, custom samp
 
 **"Model not found"**
 - Run `python download_models.py` first
-- Check model dropdown in DreamFit Checkpoint Loader
+- Check model dropdown in DreamFit nodes
+- For Unified node, check dreamfit_model parameter
 - Ensure models are in `ComfyUI/models/dreamfit/`
 
 **Poor garment preservation**
@@ -155,6 +177,7 @@ This workflow demonstrates advanced features including model images, custom samp
 - `DREAMFIT_MODEL` → Connects encoding to adaptation
 - `DREAMFIT_ENCODER` → Processes garment features
 - `DREAMFIT_CONDITIONING` → Carries garment information
+- Unified node handles everything internally
 - Standard ComfyUI types (MODEL, CLIP, VAE, etc.) work normally
 
 ### Advanced Techniques

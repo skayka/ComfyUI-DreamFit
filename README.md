@@ -161,7 +161,25 @@ Custom sampler optimized for DreamFit generation.
 **Outputs:**
 - `LATENT`: Generated image latent
 
-### 5. DreamFit Simple
+### 5. DreamFit Unified
+Complete DreamFit integration in a single node.
+
+**Inputs:**
+- `model`: Flux diffusion model (from UNETLoader)
+- `positive/negative`: Pre-encoded conditioning from CLIP
+- `garment_image`: Garment to process
+- `dreamfit_model`: Select model type
+- `strength`: Overall adaptation strength
+- `model_image` (optional): Reference pose for try-on
+- `injection_strength`: Garment feature strength
+- `injection_mode`: Feature injection strategy
+
+**Outputs:**
+- `model`: Enhanced Flux model
+- `positive/negative`: Enhanced conditioning
+- `debug_garment`: Processed garment (224x224) for debugging
+
+### 6. DreamFit Simple
 All-in-one node for easy DreamFit generation.
 
 **Inputs:**
@@ -187,7 +205,7 @@ Advanced sampler with additional controls.
 
 ## Workflow Examples
 
-Three example workflows are included in the `workflows/` directory:
+Four example workflows are included in the `workflows/` directory:
 
 ### 1. Simple Workflow (`dreamfit_simple_workflow.json`)
 - Uses the all-in-one **DreamFit Simple** node
@@ -210,6 +228,12 @@ Three example workflows are included in the `workflows/` directory:
 2. Click "Load" in the menu
 3. Navigate to `ComfyUI/custom_nodes/ComfyUI-DreamFit/workflows/`
 4. Select the desired workflow JSON file
+
+### 4. Unified Workflow (`dreamfit_unified_workflow.json`)
+- Uses the new **DreamFit Unified** node
+- Proper Flux model loading (UNETLoader, DualCLIPLoader, VAELoader)
+- Shows debug output of processed garment
+- Best for understanding the complete pipeline
 
 ## Tips for Best Results
 

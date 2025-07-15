@@ -25,9 +25,7 @@ class DreamFitFluxAdapterV2:
             "required": {
                 "model": ("MODEL",),
                 "clip": ("CLIP",),
-                "dreamfit_model": ("DREAMFIT_MODEL",),
-                "dreamfit_encoder": ("DREAMFIT_ENCODER",),
-                "garment_image": ("IMAGE",),
+                "dreamfit_conditioning": ("DREAMFIT_CONDITIONING",),
                 "positive": ("STRING", {
                     "default": "A person wearing the garment",
                     "multiline": True
@@ -38,14 +36,13 @@ class DreamFitFluxAdapterV2:
                 }),
             },
             "optional": {
-                "model_image": ("IMAGE",),  # Optional pose reference
                 "lora_strength": ("FLOAT", {
                     "default": 1.0,
                     "min": 0.0,
                     "max": 2.0,
                     "step": 0.05
                 }),
-                "garment_strength": ("FLOAT", {
+                "injection_strength": ("FLOAT", {
                     "default": 0.5,
                     "min": 0.0,
                     "max": 1.0,
@@ -63,26 +60,33 @@ class DreamFitFluxAdapterV2:
         self,
         model,
         clip,
-        dreamfit_model: Dict,
-        dreamfit_encoder,
-        garment_image: torch.Tensor,
+        dreamfit_conditioning: Dict,
         positive: str,
         negative: str,
-        model_image: Optional[torch.Tensor] = None,
         lora_strength: float = 1.0,
-        garment_strength: float = 0.5
+        injection_strength: float = 0.5
     ):
         """
-        Adapt model with DreamFit and create conditioning
+        Adapt model with DreamFit conditioning and create text conditioning
         """
         # Clone the model to avoid modifying the original
         adapted_model = copy.deepcopy(model)
         
-        # Apply DreamFit LoRA adaptation
-        if dreamfit_model.get("lora_weights"):
+        # Extract components from dreamfit_conditioning
+        garment_features = dreamfit_conditioning.get("garment_features", {})
+        model_config = dreamfit_conditioning.get("model_config", {})
+        adapter_state = dreamfit_conditioning.get("adapter_state", {})
+        injection_config = dreamfit_conditioning.get("injection_config", {})
+        
+        # Override injection strength if provided
+        if injection_strength is not None:
+            injection_config["injection_strength"] = injection_strength
+        
+        # Apply DreamFit LoRA adaptation if available
+        if adapter_state.get("lora_weights"):
             adapted_model = self._apply_lora_adaptation(
                 adapted_model,
-                dreamfit_model["lora_weights"],
+                adapter_state["lora_weights"],
                 lora_strength
             )
         
@@ -93,39 +97,35 @@ class DreamFitFluxAdapterV2:
         positive_cond, positive_pooled = clip.encode_from_tokens(positive_tokens)
         negative_cond, negative_pooled = clip.encode_from_tokens(negative_tokens)
         
-        # Process garment features
-        with torch.no_grad():
-            # Ensure garment image is in the right format
-            if garment_image.dim() == 4:  # B, H, W, C
-                garment_image = garment_image.permute(0, 3, 1, 2)  # B, C, H, W
-            
-            # Extract garment features using the encoder
-            garment_features = dreamfit_encoder.encode_garment(garment_image)
-            
-            # If model image is provided, encode it too
-            model_features = None
-            if model_image is not None:
-                if model_image.dim() == 4:
-                    model_image = model_image.permute(0, 3, 1, 2)
-                model_features = dreamfit_encoder.encode_pose(model_image)
+        # Create conditioning with DreamFit features embedded
+        positive_conditioning = [[
+            positive_cond, 
+            {
+                "pooled_output": positive_pooled,
+                "dreamfit_features": {
+                    "garment_token": garment_features.get("garment_token"),
+                    "pooled_features": garment_features.get("pooled_features"),
+                    "patch_features": garment_features.get("patch_features"),
+                    "features": garment_features.get("features"),
+                    "injection_config": injection_config
+                }
+            }
+        ]]
         
-        # Inject garment features into the model
-        self._setup_attention_injection(
-            adapted_model,
-            garment_features,
-            model_features,
-            garment_strength
-        )
+        negative_conditioning = [[
+            negative_cond,
+            {"pooled_output": negative_pooled} if negative_pooled is not None else {}
+        ]]
         
-        # Store DreamFit components in the model for the sampler
+        # Store DreamFit components in the model for compatibility
         adapted_model.dreamfit_components = {
             "garment_features": garment_features,
-            "model_features": model_features,
-            "garment_strength": garment_strength,
-            "encoder": dreamfit_encoder
+            "pose_features": dreamfit_conditioning.get("pose_features"),
+            "injection_config": injection_config,
+            "model_config": model_config
         }
         
-        return (adapted_model, [[positive_cond, {"pooled_output": positive_pooled}]], [[negative_cond, {"pooled_output": negative_pooled}]])
+        return (adapted_model, positive_conditioning, negative_conditioning)
     
     def _apply_lora_adaptation(self, model, lora_weights, strength):
         """Apply LoRA weights to the model"""

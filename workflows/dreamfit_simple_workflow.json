@@ -4,7 +4,7 @@
   "nodes": [
     {
       "id": 1,
-      "type": "CheckpointLoaderSimple",
+      "type": "UNETLoader",
       "pos": [100, 100],
       "size": {"0": 315, "1": 98},
       "flags": {},
@@ -15,8 +15,8 @@
         {"name": "CLIP", "type": "CLIP", "links": [2], "slot_index": 1},
         {"name": "VAE", "type": "VAE", "links": [3], "slot_index": 2}
       ],
-      "properties": {"Node name for S&R": "CheckpointLoaderSimple"},
-      "widgets_values": ["flux1-dev.safetensors"]
+      "properties": {"Node name for S&R": "UNETLoader"},
+      "widgets_values": ["flux1-dev-fp8.safetensors", "fp8_e4m3fn"]
     },
     {
       "id": 2,

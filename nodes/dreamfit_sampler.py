@@ -155,9 +155,38 @@ class DreamFitKSampler:
         Returns:
             Modified positive conditioning
         """
-        # For now, just return the original conditioning
-        # TODO: Implement proper DreamFit conditioning integration
-        return positive
+        # Extract garment features from conditioning
+        garment_features = dreamfit_conditioning.get("garment_features", {})
+        injection_config = dreamfit_conditioning.get("injection_config", {})
+        
+        # Create a copy of positive conditioning to modify
+        modified_positive = []
+        
+        for cond, extras in positive:
+            # Create a new extras dict with DreamFit features
+            new_extras = extras.copy() if extras else {}
+            
+            # Add garment features to conditioning extras
+            new_extras["dreamfit_features"] = {
+                "garment_token": garment_features.get("garment_token"),
+                "pooled_features": garment_features.get("pooled_features"),
+                "patch_features": garment_features.get("patch_features"),
+                "injection_strength": injection_config.get("injection_strength", 0.5),
+                "injection_mode": injection_config.get("injection_mode", "adaptive"),
+                "injection_layers": injection_config.get("injection_layers", [3, 6, 9, 12, 15, 18])
+            }
+            
+            # Add pose features if available
+            if "pose_features" in dreamfit_conditioning:
+                new_extras["dreamfit_features"]["pose_features"] = dreamfit_conditioning["pose_features"]
+            
+            # Add garment mask if available
+            if "garment_mask" in dreamfit_conditioning:
+                new_extras["dreamfit_features"]["garment_mask"] = dreamfit_conditioning["garment_mask"]
+            
+            modified_positive.append([cond, new_extras])
+        
+        return modified_positive
     
     def _configure_flux_sampling(self, model):
         """
@@ -363,10 +392,68 @@ class DreamFitSamplerAdvanced:
         dreamfit_components: Dict,
         injection_schedule: str
     ):
-        """Apply advanced DreamFit conditioning"""
-        # For now, just return the original conditioning
-        # TODO: Implement proper DreamFit conditioning integration with schedules
-        return positive
+        """Apply advanced DreamFit conditioning with injection schedules"""
+        # Extract features
+        garment_features = dreamfit_conditioning.get("garment_features", {})
+        injection_config = dreamfit_conditioning.get("injection_config", {})
+        
+        # Create modified conditioning
+        modified_positive = []
+        
+        for cond, extras in positive:
+            new_extras = extras.copy() if extras else {}
+            
+            # Create schedule configuration
+            schedule_config = {
+                "type": injection_schedule,
+                "params": {}
+            }
+            
+            if injection_schedule == "linear":
+                # Linear decay from full strength to 0
+                schedule_config["params"] = {
+                    "start_strength": injection_config.get("injection_strength", 0.5),
+                    "end_strength": 0.0
+                }
+            elif injection_schedule == "cosine":
+                # Cosine decay
+                schedule_config["params"] = {
+                    "strength": injection_config.get("injection_strength", 0.5),
+                    "period": 1.0  # Full period over sampling steps
+                }
+            elif injection_schedule == "step":
+                # Step function - full strength for first half, then reduced
+                schedule_config["params"] = {
+                    "initial_strength": injection_config.get("injection_strength", 0.5),
+                    "step_point": 0.5,  # Switch at 50% of steps
+                    "final_strength": injection_config.get("injection_strength", 0.5) * 0.3
+                }
+            else:  # constant
+                schedule_config["params"] = {
+                    "strength": injection_config.get("injection_strength", 0.5)
+                }
+            
+            # Build DreamFit features with schedule
+            new_extras["dreamfit_features"] = {
+                "garment_token": garment_features.get("garment_token"),
+                "pooled_features": garment_features.get("pooled_features"),
+                "patch_features": garment_features.get("patch_features"),
+                "features": garment_features.get("features"),
+                "injection_mode": injection_config.get("injection_mode", "adaptive"),
+                "injection_layers": injection_config.get("injection_layers", [3, 6, 9, 12, 15, 18]),
+                "injection_schedule": schedule_config
+            }
+            
+            # Add optional features
+            if "pose_features" in dreamfit_conditioning:
+                new_extras["dreamfit_features"]["pose_features"] = dreamfit_conditioning["pose_features"]
+            
+            if "garment_mask" in dreamfit_conditioning:
+                new_extras["dreamfit_features"]["garment_mask"] = dreamfit_conditioning["garment_mask"]
+            
+            modified_positive.append([cond, new_extras])
+        
+        return modified_positive
     
     def _generate_noise(
         self,
