@@ -16,9 +16,21 @@ class DreamFitSimple:
     
     @classmethod
     def INPUT_TYPES(cls):
-        # Get available models
-        manager = DreamFitModelManager()
-        available_models = ["flux_i2i", "flux_i2i_with_pose", "flux_tryon"]
+        # Check which models are actually available
+        try:
+            import folder_paths
+            models_dir = os.path.join(folder_paths.models_dir, "dreamfit")
+        except ImportError:
+            models_dir = os.path.join(os.path.expanduser("~"), ".cache", "dreamfit")
+        
+        available_models = []
+        for model_name in ["flux_i2i", "flux_i2i_with_pose", "flux_tryon"]:
+            model_path = os.path.join(models_dir, f"{model_name}.bin")
+            if os.path.exists(model_path):
+                available_models.append(model_name)
+        
+        if not available_models:
+            available_models = ["Please run download_models.py first"]
         
         return {
             "required": {
@@ -42,7 +54,6 @@ class DreamFitSimple:
             },
             "optional": {
                 "model_image": ("IMAGE",),
-                "download_if_missing": ("BOOLEAN", {"default": True}),
             }
         }
     
@@ -64,8 +75,7 @@ class DreamFitSimple:
         steps: int,
         cfg: float,
         denoise: float,
-        model_image=None,
-        download_if_missing: bool = True
+        model_image=None
     ):
         """
         Complete DreamFit generation in one node
@@ -82,13 +92,12 @@ class DreamFitSimple:
         
         model_path = os.path.join(models_dir, f"{dreamfit_model}.bin")
         
-        # Download if needed
+        # Check if model exists
         if not os.path.exists(model_path):
-            if download_if_missing:
-                print(f"Downloading {dreamfit_model} model...")
-                manager.download_model(dreamfit_model, models_dir)
-            else:
-                raise FileNotFoundError(f"Model {dreamfit_model} not found")
+            raise FileNotFoundError(
+                f"Model {dreamfit_model} not found at {model_path}\n"
+                f"Please run: python download_models.py --model {dreamfit_model}"
+            )
         
         # Simplified generation process
         # 1. Encode text

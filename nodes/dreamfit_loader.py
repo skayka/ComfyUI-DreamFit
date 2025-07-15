@@ -28,24 +28,25 @@ class DreamFitCheckpointLoader:
             models_dir = os.path.join(os.path.expanduser("~"), ".cache", "dreamfit")
         os.makedirs(models_dir, exist_ok=True)
         
-        # List of available models
-        model_files = ["flux_i2i.bin", "flux_i2i_with_pose.bin", "flux_tryon.bin"]
-        
-        # Check which models are already downloaded
+        # Check which models are actually available
         available_models = []
-        for model in model_files:
-            model_name = model.replace(".bin", "")
-            if os.path.exists(os.path.join(models_dir, model)):
-                available_models.append(f"{model_name} (downloaded)")
+        model_choices = []
+        for model_name in ["flux_i2i", "flux_i2i_with_pose", "flux_tryon"]:
+            model_path = os.path.join(models_dir, f"{model_name}.bin")
+            if os.path.exists(model_path):
+                available_models.append(model_name)
+                model_choices.append(model_name)
             else:
-                available_models.append(f"{model_name} (download required)")
+                model_choices.append(f"{model_name} (not downloaded)")
+        
+        if not available_models:
+            model_choices = ["Please run download_models.py first"]
         
         return {
             "required": {
-                "model_name": (["flux_i2i", "flux_i2i_with_pose", "flux_tryon"],),
+                "model_name": (model_choices,),
                 "device": (["cuda", "cpu"], {"default": "cuda"}),
                 "dtype": (["fp16", "bf16", "fp32"], {"default": "fp16"}),
-                "download_if_missing": ("BOOLEAN", {"default": True}),
             }
         }
     
@@ -54,12 +55,31 @@ class DreamFitCheckpointLoader:
     FUNCTION = "load_checkpoint"
     CATEGORY = "DreamFit"
     
-    def load_checkpoint(self, model_name, device, dtype, download_if_missing):
+    def load_checkpoint(self, model_name, device, dtype):
         """
         Load DreamFit checkpoint and return model components
         """
         # Initialize model manager
         manager = DreamFitModelManager()
+        
+        # Check for invalid selection
+        if model_name == "Please run download_models.py first":
+            raise ValueError(
+                "No DreamFit models found!\n\n"
+                "Please download models first by running:\n"
+                "python download_models.py\n\n"
+                "From the ComfyUI-DreamFit directory"
+            )
+        
+        # Check if user selected a not-downloaded model
+        if " (not downloaded)" in model_name:
+            actual_model_name = model_name.replace(" (not downloaded)", "")
+            raise ValueError(
+                f"Model '{actual_model_name}' is not downloaded!\n\n"
+                f"Please download it first by running:\n"
+                f"python download_models.py --model {actual_model_name}\n\n"
+                f"From the ComfyUI-DreamFit directory"
+            )
         
         # Get model path
         try:
@@ -70,13 +90,12 @@ class DreamFitCheckpointLoader:
             models_dir = os.path.join(os.path.expanduser("~"), ".cache", "dreamfit")
         model_path = os.path.join(models_dir, f"{model_name}.bin")
         
-        # Download if needed
+        # Final check if file exists
         if not os.path.exists(model_path):
-            if download_if_missing:
-                print(f"Downloading {model_name} model...")
-                manager.download_model(model_name, models_dir)
-            else:
-                raise FileNotFoundError(f"Model {model_name} not found at {model_path}")
+            raise FileNotFoundError(
+                f"Model file not found at: {model_path}\n\n"
+                f"Please run: python download_models.py --model {model_name}"
+            )
         
         # Map dtype string to torch dtype
         dtype_map = {

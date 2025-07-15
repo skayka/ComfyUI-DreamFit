@@ -1,0 +1,370 @@
+{
+  "last_node_id": 15,
+  "last_link_id": 25,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "DreamFitCheckpointLoader",
+      "pos": [50, 100],
+      "size": {"0": 315, "1": 126},
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "outputs": [
+        {"name": "dreamfit_model", "type": "DREAMFIT_MODEL", "links": [1], "slot_index": 0},
+        {"name": "encoder", "type": "DREAMFIT_ENCODER", "links": [2], "slot_index": 1},
+        {"name": "config", "type": "DREAMFIT_CONFIG", "links": [23], "slot_index": 2}
+      ],
+      "properties": {"Node name for S&R": "DreamFitCheckpointLoader"},
+      "widgets_values": ["flux_tryon", "cuda", "fp16"]
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [50, 250],
+      "size": {"0": 315, "1": 314},
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [3], "slot_index": 0},
+        {"name": "MASK", "type": "MASK", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["garment.png", "image"]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [50, 600],
+      "size": {"0": 315, "1": 314},
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [4], "slot_index": 0},
+        {"name": "MASK", "type": "MASK", "links": [21], "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["model.png", "image"]
+    },
+    {
+      "id": 4,
+      "type": "DreamFitEncode",
+      "pos": [400, 100],
+      "size": {"0": 400, "1": 400},
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "encoder", "type": "DREAMFIT_ENCODER", "link": 2},
+        {"name": "garment_image", "type": "IMAGE", "link": 3},
+        {"name": "model_image", "type": "IMAGE", "link": 4}
+      ],
+      "outputs": [
+        {"name": "conditioning", "type": "DREAMFIT_CONDITIONING", "links": [5], "slot_index": 0},
+        {"name": "enhanced_prompt", "type": "STRING", "links": [10], "slot_index": 1},
+        {"name": "enhanced_negative", "type": "STRING", "links": [11], "slot_index": 2}
+      ],
+      "properties": {"Node name for S&R": "DreamFitEncode"},
+      "widgets_values": [
+        "A person wearing a beautiful red silk dress with floral patterns, high fashion photoshoot",
+        "Professional model pose, studio lighting",
+        "elegant silk dress with floral embroidery",
+        "formal",
+        true,
+        true,
+        1.2
+      ]
+    },
+    {
+      "id": 5,
+      "type": "CheckpointLoaderSimple",
+      "pos": [50, 950],
+      "size": {"0": 315, "1": 98},
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "links": [6], "slot_index": 0},
+        {"name": "CLIP", "type": "CLIP", "links": [7], "slot_index": 1},
+        {"name": "VAE", "type": "VAE", "links": [13, 20], "slot_index": 2}
+      ],
+      "properties": {"Node name for S&R": "CheckpointLoaderSimple"},
+      "widgets_values": ["flux1-dev-fp8.safetensors"]
+    },
+    {
+      "id": 6,
+      "type": "DreamFitFluxAdapterV2",
+      "pos": [850, 100],
+      "size": {"0": 350, "1": 350},
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 6},
+        {"name": "clip", "type": "CLIP", "link": 7},
+        {"name": "dreamfit_conditioning", "type": "DREAMFIT_CONDITIONING", "link": 5},
+        {"name": "positive", "type": "STRING", "link": 10, "widget": {"name": "positive"}},
+        {"name": "negative", "type": "STRING", "link": 11, "widget": {"name": "negative"}}
+      ],
+      "outputs": [
+        {"name": "model", "type": "MODEL", "links": [8, 16], "slot_index": 0},
+        {"name": "positive", "type": "CONDITIONING", "links": [9], "slot_index": 1},
+        {"name": "negative", "type": "CONDITIONING", "links": [12], "slot_index": 2}
+      ],
+      "properties": {"Node name for S&R": "DreamFitFluxAdapterV2"},
+      "widgets_values": [1.2, 1.0, "auto", "cross", "adaptive", true]
+    },
+    {
+      "id": 7,
+      "type": "VAEEncode",
+      "pos": [400, 550],
+      "size": {"0": 210, "1": 46},
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {"name": "pixels", "type": "IMAGE", "link": 19},
+        {"name": "vae", "type": "VAE", "link": 20}
+      ],
+      "outputs": [
+        {"name": "LATENT", "type": "LATENT", "links": [14], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "VAEEncode"}
+    },
+    {
+      "id": 8,
+      "type": "ImageComposite",
+      "pos": [400, 650],
+      "size": {"0": 315, "1": 126},
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {"name": "destination", "type": "IMAGE", "link": 18},
+        {"name": "source", "type": "IMAGE", "link": 22},
+        {"name": "mask", "type": "MASK", "link": 21}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [19], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "ImageComposite"},
+      "widgets_values": [0, 0, false]
+    },
+    {
+      "id": 9,
+      "type": "EmptyImage",
+      "pos": [400, 800],
+      "size": {"0": 315, "1": 127},
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [18, 22], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "EmptyImage"},
+      "widgets_values": [1024, 1024, 1, 0]
+    },
+    {
+      "id": 10,
+      "type": "DreamFitSamplerAdvanced",
+      "pos": [1250, 100],
+      "size": {"0": 315, "1": 600},
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 8},
+        {"name": "positive", "type": "CONDITIONING", "link": 9},
+        {"name": "negative", "type": "CONDITIONING", "link": 12},
+        {"name": "latent_image", "type": "LATENT", "link": 14},
+        {"name": "flux_sampler", "type": "SAMPLER", "link": 15}
+      ],
+      "outputs": [
+        {"name": "LATENT", "type": "LATENT", "links": [17], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "DreamFitSamplerAdvanced"},
+      "widgets_values": [
+        42,
+        30,
+        8.0,
+        "dpmpp_2m",
+        "karras",
+        0.8,
+        1.5,
+        "linear_decay",
+        0,
+        10000,
+        true,
+        false,
+        1.0,
+        "cosine",
+        0.3,
+        true
+      ]
+    },
+    {
+      "id": 11,
+      "type": "FluxGuidance",
+      "pos": [850, 500],
+      "size": {"0": 317, "1": 58},
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {"name": "conditioning", "type": "CONDITIONING", "link": 24}
+      ],
+      "outputs": [
+        {"name": "CONDITIONING", "type": "CONDITIONING", "links": [25], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "FluxGuidance"},
+      "widgets_values": [3.5]
+    },
+    {
+      "id": 12,
+      "type": "SamplerCustomAdvanced",
+      "pos": [850, 600],
+      "size": {"0": 355, "1": 106},
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 16},
+        {"name": "positive", "type": "CONDITIONING", "link": 25},
+        {"name": "negative", "type": "CONDITIONING", "link": null},
+        {"name": "sampler", "type": "SAMPLER", "link": null},
+        {"name": "sigmas", "type": "SIGMAS", "link": null},
+        {"name": "latent_image", "type": "LATENT", "link": null}
+      ],
+      "outputs": [
+        {"name": "output", "type": "LATENT", "links": null, "slot_index": 0},
+        {"name": "denoised_output", "type": "LATENT", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "SamplerCustomAdvanced"}
+    },
+    {
+      "id": 13,
+      "type": "KSamplerSelect",
+      "pos": [850, 750],
+      "size": {"0": 315, "1": 58},
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "outputs": [
+        {"name": "SAMPLER", "type": "SAMPLER", "links": [15], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "KSamplerSelect"},
+      "widgets_values": ["euler"]
+    },
+    {
+      "id": 14,
+      "type": "VAEDecode",
+      "pos": [1600, 100],
+      "size": {"0": 210, "1": 46},
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {"name": "samples", "type": "LATENT", "link": 17},
+        {"name": "vae", "type": "VAE", "link": 13}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [26], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "VAEDecode"}
+    },
+    {
+      "id": 15,
+      "type": "SaveImage",
+      "pos": [1850, 100],
+      "size": {"0": 315, "1": 270},
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 26}
+      ],
+      "properties": {},
+      "widgets_values": ["DreamFit_Advanced"]
+    },
+    {
+      "id": 16,
+      "type": "DreamFitModelValidator",
+      "pos": [50, 1100],
+      "size": {"0": 315, "1": 126},
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {"name": "dreamfit_model", "type": "DREAMFIT_MODEL", "link": 1},
+        {"name": "encoder", "type": "DREAMFIT_ENCODER", "link": 2},
+        {"name": "config", "type": "DREAMFIT_CONFIG", "link": 23}
+      ],
+      "outputs": [
+        {"name": "info", "type": "STRING", "links": null, "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "DreamFitModelValidator"}
+    }
+  ],
+  "links": [
+    [1, 1, 0, 4, 0, "DREAMFIT_MODEL"],
+    [2, 1, 1, 4, 1, "DREAMFIT_ENCODER"],
+    [3, 2, 0, 4, 2, "IMAGE"],
+    [4, 3, 0, 4, 3, "IMAGE"],
+    [5, 4, 0, 6, 2, "DREAMFIT_CONDITIONING"],
+    [6, 5, 0, 6, 0, "MODEL"],
+    [7, 5, 1, 6, 1, "CLIP"],
+    [8, 6, 0, 10, 0, "MODEL"],
+    [9, 6, 1, 10, 1, "CONDITIONING"],
+    [10, 4, 1, 6, 3, "STRING"],
+    [11, 4, 2, 6, 4, "STRING"],
+    [12, 6, 2, 10, 2, "CONDITIONING"],
+    [13, 5, 2, 14, 1, "VAE"],
+    [14, 7, 0, 10, 3, "LATENT"],
+    [15, 13, 0, 10, 4, "SAMPLER"],
+    [16, 6, 0, 12, 0, "MODEL"],
+    [17, 10, 0, 14, 0, "LATENT"],
+    [18, 9, 0, 8, 0, "IMAGE"],
+    [19, 8, 0, 7, 0, "IMAGE"],
+    [20, 5, 2, 7, 1, "VAE"],
+    [21, 3, 1, 8, 2, "MASK"],
+    [22, 9, 0, 8, 1, "IMAGE"],
+    [23, 1, 2, 16, 2, "DREAMFIT_CONFIG"],
+    [24, 6, 1, 11, 0, "CONDITIONING"],
+    [25, 11, 0, 12, 1, "CONDITIONING"],
+    [26, 14, 0, 15, 0, "IMAGE"]
+  ],
+  "groups": [
+    {
+      "title": "Model & Image Loading",
+      "bounding": [30, 20, 360, 1250],
+      "color": "#3f789e"
+    },
+    {
+      "title": "DreamFit Encoding",
+      "bounding": [380, 20, 450, 900],
+      "color": "#b58b2a"
+    },
+    {
+      "title": "Flux Integration",
+      "bounding": [830, 20, 390, 850],
+      "color": "#8b5b2a"
+    },
+    {
+      "title": "Advanced Sampling",
+      "bounding": [1230, 20, 350, 700],
+      "color": "#a1309b"
+    },
+    {
+      "title": "Output",
+      "bounding": [1580, 20, 600, 380],
+      "color": "#692ba1"
+    }
+  ],
+  "config": {},
+  "extra": {
+    "info": "Advanced DreamFit workflow demonstrating virtual try-on with model image, custom sampling strategies, and Flux guidance integration."
+  },
+  "version": 0.4
+}

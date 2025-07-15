@@ -1,6 +1,6 @@
 {
   "last_node_id": 10,
-  "last_link_id": 15,
+  "last_link_id": 17,
   "nodes": [
     {
       "id": 1,
@@ -16,7 +16,7 @@
         {"name": "DREAMFIT_CONFIG", "type": "DREAMFIT_CONFIG", "links": null, "slot_index": 2}
       ],
       "properties": {"Node name for S&R": "DreamFitCheckpointLoader"},
-      "widgets_values": ["flux_i2i", true]
+      "widgets_values": ["flux_i2i", "cuda", "fp16"]
     },
     {
       "id": 2,
@@ -76,11 +76,11 @@
         {"name": "VAE", "type": "VAE", "links": [9], "slot_index": 2}
       ],
       "properties": {"Node name for S&R": "CheckpointLoaderSimple"},
-      "widgets_values": ["flux1-dev.safetensors"]
+      "widgets_values": ["flux1-dev-fp8.safetensors"]
     },
     {
       "id": 5,
-      "type": "DreamFitFluxAdapter",
+      "type": "DreamFitFluxAdapterV2",
       "pos": [950, 100],
       "size": {"0": 350, "1": 300},
       "flags": {},
@@ -88,14 +88,17 @@
       "mode": 0,
       "inputs": [
         {"name": "model", "type": "MODEL", "link": 5},
-        {"name": "dreamfit_conditioning", "type": "DREAMFIT_CONDITIONING", "link": 4}
+        {"name": "clip", "type": "CLIP", "link": 17},
+        {"name": "dreamfit_conditioning", "type": "DREAMFIT_CONDITIONING", "link": 4},
+        {"name": "positive", "type": "STRING", "link": 10, "widget": {"name": "positive"}},
+        {"name": "negative", "type": "STRING", "link": 11, "widget": {"name": "negative"}}
       ],
       "outputs": [
-        {"name": "adapted_model", "type": "MODEL", "links": [6], "slot_index": 0},
+        {"name": "model", "type": "MODEL", "links": [6], "slot_index": 0},
         {"name": "positive", "type": "CONDITIONING", "links": [7], "slot_index": 1},
         {"name": "negative", "type": "CONDITIONING", "links": [8], "slot_index": 2}
       ],
-      "properties": {"Node name for S&R": "DreamFitFluxAdapter"},
+      "properties": {"Node name for S&R": "DreamFitFluxAdapterV2"},
       "widgets_values": [1.0, 1.0, "auto", "cross", "adaptive", true]
     },
     {
@@ -211,7 +214,8 @@
     [13, 4, 1, 11, 0, "CLIP"],
     [14, 6, 0, 7, 3, "LATENT"],
     [15, 7, 0, 8, 0, "LATENT"],
-    [16, 8, 0, 9, 0, "IMAGE"]
+    [16, 8, 0, 9, 0, "IMAGE"],
+    [17, 4, 1, 5, 1, "CLIP"]
   ],
   "groups": [
     {
