@@ -69,7 +69,7 @@ class PromptEnhancer:
         
         if not has_garment and not garment_description:
             # Add generic garment context
-            enhanced_parts.append("fashionable garment")\n        
+            enhanced_parts.append("fashionable garment")
         # Add original prompt
         enhanced_parts.append(prompt)
         
