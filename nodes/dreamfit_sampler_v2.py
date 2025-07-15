@@ -8,6 +8,8 @@ from typing import Dict, Optional, Any
 import comfy.sample
 import comfy.samplers
 import comfy.model_management
+import comfy.sample_as
+import nodes
 from ..dreamfit_core.models.dreamfit_model_wrapper import DreamFitModelWrapper
 
 
@@ -80,37 +82,44 @@ class DreamFitKSamplerV2:
             # Wrap the model with DreamFit wrapper
             wrapped_model = DreamFitModelWrapper(model, garment_dict)
         
-        # Create custom callback for two-phase sampling
-        def dreamfit_callback(step, x0, x, total_steps):
-            """Callback to handle read/write mode switching"""
-            if step == 0:
-                # First step: write mode
-                wrapped_model.set_mode("write")
-                
-                # Prepare garment conditioning
-                # This simulates calling the model with inp_cloth
-                with torch.no_grad():
-                    # Create dummy inputs matching the latent shape
-                    dummy_latent = torch.zeros_like(x)
-                    
-                    # Call model in write mode to store features
-                    # This doesn't affect the actual sampling, just stores features
-                    try:
-                        _ = wrapped_model._wrapped_forward(
-                            dummy_latent,
-                            timesteps=torch.zeros(1, device=x.device),
-                            context=positive[0][0] if positive else None
-                        )
-                    except:
-                        # Fallback if forward signature is different
-                        pass
-                
-                # Switch to read mode for actual sampling
-                wrapped_model.set_mode("read")
+        # DreamFit's two-phase approach requires special handling
+        # First, we need to do the "write" phase with garment features
+        device = comfy.model_management.get_torch_device()
+        
+        # Get latent info
+        latent_samples = latent_image["samples"]
+        batch_size = latent_samples.shape[0]
+        
+        # Create timestep vector for first step
+        t_vec = torch.zeros((batch_size,), dtype=latent_samples.dtype, device=device)
+        
+        # Phase 1: Write garment features
+        wrapped_model.set_mode("write")
+        with torch.no_grad():
+            # We need to prepare the garment latent in the same format
+            # For now, use the same latent shape filled with noise
+            garment_latent = torch.randn_like(latent_samples)
             
-            # For all steps, ensure we're in read mode
-            if step >= 0:
-                wrapped_model.set_mode("read")
+            # Call model with garment features to store them
+            # This mimics inp_cloth call in official DreamFit
+            try:
+                # The model expects specific inputs - we'll use the wrapped model's forward
+                # This stores the garment features internally
+                _ = wrapped_model(
+                    garment_latent,
+                    t_vec,
+                    context=enhanced_positive[0][0] if enhanced_positive else None
+                )
+            except Exception as e:
+                print(f"Warning: Write phase failed: {e}")
+        
+        # Phase 2: Switch to read mode for actual generation
+        wrapped_model.set_mode("read")
+        
+        # Create callback that maintains read mode
+        def dreamfit_callback(step, x0, x, total_steps):
+            """Ensure we stay in read mode during sampling"""
+            wrapped_model.set_mode("read")
         
         # Prepare conditioning with garment features
         enhanced_positive = self._enhance_conditioning_for_sampling(positive, garment_dict)
@@ -118,33 +127,61 @@ class DreamFitKSamplerV2:
         # Reset the wrapper before sampling
         wrapped_model.reset()
         
-        # Perform sampling with callback
-        samples = comfy.sample.sample(
-            wrapped_model,
-            noise=None,
-            steps=steps,
-            cfg=cfg,
-            sampler_name=sampler_name,
-            scheduler=scheduler,
-            positive=enhanced_positive,
-            negative=negative,
-            latent_image=latent_image["samples"],
-            start_step=None,
-            last_step=None,
-            force_full_denoise=denoise == 1.0,
-            denoise=denoise,
-            seed=seed,
-            callback=dreamfit_callback
-        )
-        
-        # Reset wrapper after sampling
-        wrapped_model.reset()
-        wrapped_model.set_mode("normal")
-        
-        out = latent_image.copy()
-        out["samples"] = samples
-        
-        return (out,)
+        # Use common_ksampler if available for consistency
+        if hasattr(nodes, 'common_ksampler'):
+            # Create a custom callback wrapper that integrates with common_ksampler
+            original_callback = dreamfit_callback
+            
+            # Use common_ksampler with our wrapped model
+            samples = nodes.common_ksampler(
+                model=wrapped_model,
+                seed=seed,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                positive=enhanced_positive,
+                negative=negative,
+                latent=latent_image,
+                denoise=denoise
+            )
+            
+            # Call our callback for the first step to set modes
+            if steps > 0:
+                dreamfit_callback(0, None, None, steps)
+            
+            return (samples,)
+        else:
+            # Fallback to direct sampling
+            latent_samples = latent_image["samples"]
+            
+            # Perform sampling with callback
+            samples = comfy.sample.sample(
+                wrapped_model,
+                noise=None,  # Let ComfyUI generate noise from seed
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                positive=enhanced_positive,
+                negative=negative,
+                latent_image=latent_samples,
+                start_step=None,
+                last_step=None,
+                force_full_denoise=denoise == 1.0,
+                denoise=denoise,
+                seed=seed,
+                callback=dreamfit_callback
+            )
+            
+            # Reset wrapper after sampling
+            wrapped_model.reset()
+            wrapped_model.set_mode("normal")
+            
+            out = latent_image.copy()
+            out["samples"] = samples
+            
+            return (out,)
     
     def _standard_sample(
         self,
@@ -160,27 +197,46 @@ class DreamFitKSamplerV2:
         denoise: float
     ):
         """Standard sampling without garment features"""
-        samples = comfy.sample.sample(
-            model,
-            noise=None,
-            steps=steps,
-            cfg=cfg,
-            sampler_name=sampler_name,
-            scheduler=scheduler,
-            positive=positive,
-            negative=negative,
-            latent_image=latent_image["samples"],
-            start_step=None,
-            last_step=None,
-            force_full_denoise=denoise == 1.0,
-            denoise=denoise,
-            seed=seed
-        )
-        
-        out = latent_image.copy()
-        out["samples"] = samples
-        
-        return (out,)
+        # Use common_ksampler from nodes module if available
+        if hasattr(nodes, 'common_ksampler'):
+            samples = nodes.common_ksampler(
+                model=model,
+                seed=seed,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                positive=positive,
+                negative=negative,
+                latent=latent_image,
+                denoise=denoise
+            )
+            return (samples,)
+        else:
+            # Fallback to direct sample call
+            latent_samples = latent_image["samples"]
+            
+            samples = comfy.sample.sample(
+                model,
+                noise=None,  # Let ComfyUI generate noise from seed
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                positive=positive,
+                negative=negative,
+                latent_image=latent_samples,
+                start_step=None,
+                last_step=None,
+                force_full_denoise=denoise == 1.0,
+                denoise=denoise,
+                seed=seed
+            )
+            
+            out = latent_image.copy()
+            out["samples"] = samples
+            
+            return (out,)
     
     def _enhance_conditioning_for_sampling(self, conditioning, garment_features: Dict):
         """

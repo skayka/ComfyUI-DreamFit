@@ -96,10 +96,10 @@ class DreamFitModelWrapper(nn.Module):
     
     def _wrapped_forward(self, *args, **kwargs):
         """Wrapped forward that handles read/write logic"""
-        # Check if this is the first call (write mode)
-        if not self.features_written and self.current_mode == "write":
+        # Handle different modes
+        if self.current_mode in ["write", "neg_write"]:
             return self._forward_write_mode(*args, **kwargs)
-        elif self.current_mode == "read":
+        elif self.current_mode in ["read", "neg_read"]:
             return self._forward_read_mode(*args, **kwargs)
         else:
             # Normal forward
@@ -107,38 +107,60 @@ class DreamFitModelWrapper(nn.Module):
     
     def _forward_write_mode(self, *args, **kwargs):
         """Forward pass in write mode - stores garment features"""
-        # Prepare garment inputs
-        garment_inputs = self._prepare_garment_inputs(*args, **kwargs)
+        # In write mode, we need to:
+        # 1. Process the input through the model
+        # 2. Store the attention features for later use
         
-        # Call model with garment features
-        # This simulates the first call with inp_cloth in DreamFit
+        # Get the actual forward result
         with torch.no_grad():
-            # Store the current inputs
+            # Store current inputs for potential reuse
             self.stored_args = args
             self.stored_kwargs = kwargs
+            
+            # Process through the model to generate attention features
+            output = self.original_forward(*args, **kwargs)
+            
+            # In DreamFit, the write mode stores attention K,V values
+            # Since we can't easily hook into attention layers here,
+            # we'll store the output features for later injection
+            if self.current_mode == "write":
+                self.garment_storage["write_features"] = output
+                self.garment_storage["write_args"] = args
+                self.garment_storage["write_kwargs"] = kwargs
+            elif self.current_mode == "neg_write":
+                self.garment_storage["neg_write_features"] = output
+                self.garment_storage["neg_write_args"] = args
+                self.garment_storage["neg_write_kwargs"] = kwargs
             
             # Mark features as written
             self.features_written = True
             
-            # For write mode, we don't actually need to return anything meaningful
-            # Just process the garment features through the model
-            # In the actual implementation, this would store Q,K,V in attention layers
-            
-        # Return zeros as placeholder (this step's output is not used)
-        if args and torch.is_tensor(args[0]):
-            return torch.zeros_like(args[0])
-        else:
-            # Fallback
-            return 0
+            return output
     
     def _forward_read_mode(self, *args, **kwargs):
         """Forward pass in read mode - uses stored garment features"""
-        # In read mode, we need to modify the attention computation
-        # to include the stored garment features
+        # Get the base output
+        output = self.original_forward(*args, **kwargs)
         
-        # For now, we'll use the standard forward with modified inputs
-        # In a full implementation, this would inject stored Q,K,V values
-        return self.original_forward(*args, **kwargs)
+        # Apply garment influence based on stored features
+        if self.features_written and output is not None:
+            # Determine which features to use based on mode
+            if self.current_mode == "read" and "write_features" in self.garment_storage:
+                stored_features = self.garment_storage["write_features"]
+                # Add garment influence (simplified version of attention injection)
+                # In real DreamFit, this happens inside attention layers
+                if stored_features is not None and output.shape == stored_features.shape:
+                    # Blend features with adjustable strength
+                    injection_strength = self.garment_features.get("injection_strength", 0.5)
+                    output = output + injection_strength * stored_features
+                    
+            elif self.current_mode == "neg_read" and "neg_write_features" in self.garment_storage:
+                stored_features = self.garment_storage["neg_write_features"]
+                if stored_features is not None and output.shape == stored_features.shape:
+                    injection_strength = self.garment_features.get("injection_strength", 0.5)
+                    output = output + injection_strength * stored_features
+        
+        return output
     
     def _prepare_garment_inputs(self, *args, **kwargs):
         """Prepare inputs for garment feature storage with projection"""

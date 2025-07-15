@@ -10,6 +10,7 @@ from .nodes.dreamfit_encode import DreamFitEncode
 from .nodes.dreamfit_adapter import DreamFitFluxAdapter
 from .nodes.dreamfit_sampler import DreamFitKSampler, DreamFitSamplerAdvanced
 from .nodes.dreamfit_sampler_v2 import DreamFitKSamplerV2
+from .nodes.dreamfit_sampler_v3 import DreamFitKSamplerV3
 from .nodes.dreamfit_adapter_v2 import DreamFitFluxAdapterV2
 from .nodes.dreamfit_adapter_v3 import DreamFitFluxAdapterV3
 from .nodes.dreamfit_unified import DreamFitUnified
@@ -26,6 +27,7 @@ NODE_CLASS_MAPPINGS = {
     "DreamFitKSampler": DreamFitKSampler,
     "DreamFitSamplerAdvanced": DreamFitSamplerAdvanced,
     "DreamFitKSamplerV2": DreamFitKSamplerV2,
+    "DreamFitKSamplerV3": DreamFitKSamplerV3,
     "DreamFitFluxAdapterV2": DreamFitFluxAdapterV2,
     "DreamFitFluxAdapterV3": DreamFitFluxAdapterV3,
     "DreamFitUnified": DreamFitUnified,
@@ -42,6 +44,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DreamFitKSampler": "DreamFit K-Sampler",
     "DreamFitSamplerAdvanced": "DreamFit Sampler Advanced",
     "DreamFitKSamplerV2": "DreamFit K-Sampler V2",
+    "DreamFitKSamplerV3": "DreamFit K-Sampler V3 (True Implementation)",
     "DreamFitFluxAdapterV2": "DreamFit Flux Adapter V2",
     "DreamFitFluxAdapterV3": "DreamFit Flux Adapter V3",
     "DreamFitUnified": "DreamFit Unified",
