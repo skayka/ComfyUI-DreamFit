@@ -180,12 +180,14 @@ class DreamFitKSampler:
             height = 1024
             
             # Apply sampling configuration
-            model = flux_sampler.patch(
+            patched = flux_sampler.patch(
                 model,
                 width=width,
                 height=height,
                 # Add other Flux-specific parameters as needed
-            )[0]
+            )
+            # Handle both tuple and direct return
+            model = patched[0] if isinstance(patched, (list, tuple)) else patched
             
         except Exception as e:
             print(f"Warning: Failed to apply Flux sampling configuration: {e}")
