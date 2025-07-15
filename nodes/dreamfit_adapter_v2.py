@@ -90,8 +90,8 @@ class DreamFitFluxAdapterV2:
         positive_tokens = clip.tokenize(positive)
         negative_tokens = clip.tokenize(negative)
         
-        positive_cond = clip.encode_from_tokens(positive_tokens)[0]
-        negative_cond = clip.encode_from_tokens(negative_tokens)[0]
+        positive_cond, positive_pooled = clip.encode_from_tokens(positive_tokens)
+        negative_cond, negative_pooled = clip.encode_from_tokens(negative_tokens)
         
         # Process garment features
         with torch.no_grad():
@@ -125,7 +125,7 @@ class DreamFitFluxAdapterV2:
             "encoder": dreamfit_encoder
         }
         
-        return (adapted_model, [[positive_cond, {}]], [[negative_cond, {}]])
+        return (adapted_model, [[positive_cond, {"pooled_output": positive_pooled}]], [[negative_cond, {"pooled_output": negative_pooled}]])
     
     def _apply_lora_adaptation(self, model, lora_weights, strength):
         """Apply LoRA weights to the model"""

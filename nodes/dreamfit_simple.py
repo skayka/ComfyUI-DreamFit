@@ -104,8 +104,9 @@ class DreamFitSimple:
         positive_tokens = clip.tokenize(positive)
         negative_tokens = clip.tokenize(negative)
         
-        positive_cond = clip.encode_from_tokens(positive_tokens)[0]
-        negative_cond = clip.encode_from_tokens(negative_tokens)[0]
+        # CLIP encode returns (cond, pooled_output), we need both
+        positive_cond, positive_pooled = clip.encode_from_tokens(positive_tokens)
+        negative_cond, negative_pooled = clip.encode_from_tokens(negative_tokens)
         
         # 2. Create empty latent
         batch_size = 1
@@ -141,8 +142,8 @@ class DreamFitSimple:
             cfg=cfg,
             sampler_name="euler",
             scheduler="normal",
-            positive=[[positive_cond, {}]],
-            negative=[[negative_cond, {}]],
+            positive=[[positive_cond, {"pooled_output": positive_pooled}]],
+            negative=[[negative_cond, {"pooled_output": negative_pooled}]],
             latent_image=latent,
             denoise=denoise,
             seed=seed
