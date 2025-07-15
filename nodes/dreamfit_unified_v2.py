@@ -456,9 +456,17 @@ class DreamFitUnifiedV2:
                 elif garment_token.shape[0] > B:
                     garment_token = garment_token[:B]
                 
-                # IMPORTANT: Concatenate garment token to conditioning sequence
-                # This is how IP-Adapter and similar methods work
-                enhanced_cond = torch.cat([cond_tensor, garment_token], dim=1)
+                # IMPORTANT: For ComfyUI compatibility, we need to enhance the existing conditioning
+                # rather than concatenate (which would change sequence length)
+                # Average the garment token and add it to the conditioning
+                if cond_tensor.shape[1] > 0:
+                    # Add garment influence to the first few tokens (similar to IP-Adapter)
+                    num_tokens_to_enhance = min(4, cond_tensor.shape[1])
+                    enhanced_cond = cond_tensor.clone()
+                    garment_influence = garment_token.mean(dim=1, keepdim=True) * injection_strength
+                    enhanced_cond[:, :num_tokens_to_enhance] += garment_influence.expand(-1, num_tokens_to_enhance, -1)
+                else:
+                    enhanced_cond = cond_tensor
                 
                 # If we have pooled features, also enhance them
                 if pooled_features is not None and "pooled_output" in new_extras:
