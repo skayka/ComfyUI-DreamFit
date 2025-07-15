@@ -28,6 +28,27 @@ class DreamFitModelWrapper(nn.Module):
         # Current mode
         self.current_mode = "normal"
         
+        # Determine model dimensions
+        # Flux uses hidden_dim=3072 for double stream blocks
+        self.garment_dim = 1024  # AnythingDressingEncoder output
+        self.hidden_dim = 3072   # Flux hidden dimension
+        
+        # Initialize projection layers for garment features
+        # Project from garment encoder dimension to Flux hidden dimension
+        self.garment_to_flux_k_proj = nn.Linear(self.garment_dim, self.hidden_dim, bias=True)
+        self.garment_to_flux_v_proj = nn.Linear(self.garment_dim, self.hidden_dim, bias=True)
+        
+        # Initialize projections to zero (following IP-Adapter style)
+        nn.init.zeros_(self.garment_to_flux_k_proj.weight)
+        nn.init.zeros_(self.garment_to_flux_k_proj.bias)
+        nn.init.zeros_(self.garment_to_flux_v_proj.weight)
+        nn.init.zeros_(self.garment_to_flux_v_proj.bias)
+        
+        # Move to same device as base model
+        device = next(base_model.parameters()).device
+        self.garment_to_flux_k_proj = self.garment_to_flux_k_proj.to(device)
+        self.garment_to_flux_v_proj = self.garment_to_flux_v_proj.to(device)
+        
         # Patch the model's forward method
         self._patch_model()
     
@@ -86,11 +107,28 @@ class DreamFitModelWrapper(nn.Module):
         return self.original_forward(*args, **kwargs)
     
     def _prepare_garment_inputs(self, *args, **kwargs):
-        """Prepare inputs for garment feature storage"""
-        # Extract the relevant inputs for garment processing
-        # This would match the inp_cloth preparation in DreamFit
+        """Prepare inputs for garment feature storage with projection"""
+        # Extract garment features
+        garment_token = self.garment_features.get("garment_token")
+        if garment_token is None:
+            return {}
+        
+        # Ensure proper shape [B, L, D] where D=1024
+        if garment_token.dim() == 2:
+            garment_token = garment_token.unsqueeze(0)
+        
+        # Project garment features to Flux dimension
+        device = garment_token.device
+        self.garment_to_flux_k_proj = self.garment_to_flux_k_proj.to(device)
+        self.garment_to_flux_v_proj = self.garment_to_flux_v_proj.to(device)
+        
+        garment_k = self.garment_to_flux_k_proj(garment_token)  # [B, L, 3072]
+        garment_v = self.garment_to_flux_v_proj(garment_token)  # [B, L, 3072]
+        
         prepared = {
-            "garment_token": self.garment_features.get("garment_token"),
+            "garment_token": garment_token,
+            "garment_k": garment_k,
+            "garment_v": garment_v,
             "patch_features": self.garment_features.get("patch_features"),
             "pooled_features": self.garment_features.get("pooled_features"),
         }
@@ -114,7 +152,8 @@ class DreamFitModelWrapper(nn.Module):
         """Delegate attribute access to base model"""
         if name in ['base_model', 'garment_features', 'garment_storage', 
                     'features_written', 'current_mode', 'original_forward',
-                    'stored_args', 'stored_kwargs']:
+                    'stored_args', 'stored_kwargs', 'garment_dim', 'hidden_dim',
+                    'garment_to_flux_k_proj', 'garment_to_flux_v_proj']:
             return super().__getattr__(name)
         return getattr(self.base_model, name)
 

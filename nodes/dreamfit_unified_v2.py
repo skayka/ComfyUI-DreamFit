@@ -428,47 +428,19 @@ class DreamFitUnifiedV2:
             # Create new extras with DreamFit features
             new_extras = extras.copy() if isinstance(extras, dict) else {}
             
-            # CRITICAL: Add garment features in a way ComfyUI can use
-            # The garment_token should modify the conditioning directly
-            garment_token = garment_features["garment_token"]
-            pooled_features = garment_features.get("pooled_features")
+            # Store garment features in extras for the custom sampler
+            # The actual injection will happen in the model wrapper
+            # We don't modify the conditioning tensor here to avoid dimension mismatch
+            enhanced_cond = cond_tensor
             
-            # Concatenate garment token to conditioning
-            # This ensures it's part of the actual conditioning passed to the model
-            if garment_token is not None:
-                # Ensure dimensions match
-                if cond_tensor.dim() == 2:
-                    cond_tensor = cond_tensor.unsqueeze(0)
-                if garment_token.dim() == 2:
-                    garment_token = garment_token.unsqueeze(0)
-                
-                # Match batch sizes
-                B = cond_tensor.shape[0]
-                if garment_token.shape[0] == 1 and B > 1:
-                    garment_token = garment_token.repeat(B, 1, 1)
-                elif garment_token.shape[0] > B:
-                    garment_token = garment_token[:B]
-                
-                # IMPORTANT: For ComfyUI compatibility, we need to enhance the existing conditioning
-                # rather than concatenate (which would change sequence length)
-                # Average the garment token and add it to the conditioning
-                if cond_tensor.shape[1] > 0:
-                    # Add garment influence to the first few tokens (similar to IP-Adapter)
-                    num_tokens_to_enhance = min(4, cond_tensor.shape[1])
-                    enhanced_cond = cond_tensor.clone()
-                    garment_influence = garment_token.mean(dim=1, keepdim=True) * injection_strength
-                    enhanced_cond[:, :num_tokens_to_enhance] += garment_influence.expand(-1, num_tokens_to_enhance, -1)
-                else:
-                    enhanced_cond = cond_tensor
-                
-                # If we have pooled features, also enhance them
-                if pooled_features is not None and "pooled_output" in new_extras:
-                    pooled = new_extras["pooled_output"]
-                    if pooled is not None:
-                        # Add garment influence to pooled output
-                        new_extras["pooled_output"] = pooled + injection_strength * pooled_features.mean(dim=0)
-            else:
-                enhanced_cond = cond_tensor
+            # If we have pooled features, we can safely enhance those
+            # since they typically match dimensions
+            pooled_features = garment_features.get("pooled_features")
+            if pooled_features is not None and "pooled_output" in new_extras:
+                pooled = new_extras["pooled_output"]
+                if pooled is not None and pooled.shape[-1] == pooled_features.shape[-1]:
+                    # Only add if dimensions match
+                    new_extras["pooled_output"] = pooled + injection_strength * pooled_features.mean(dim=0)
             
             # Also store features in extras for potential custom samplers
             new_extras["dreamfit_features"] = {
