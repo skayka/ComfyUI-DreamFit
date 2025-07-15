@@ -44,13 +44,37 @@ class DreamFitModelWrapper(nn.Module):
         nn.init.zeros_(self.garment_to_flux_v_proj.weight)
         nn.init.zeros_(self.garment_to_flux_v_proj.bias)
         
-        # Move to same device as base model
-        device = next(base_model.parameters()).device
+        # Get device from base model (handle ComfyUI ModelPatcher)
+        device = self._get_model_device(base_model)
         self.garment_to_flux_k_proj = self.garment_to_flux_k_proj.to(device)
         self.garment_to_flux_v_proj = self.garment_to_flux_v_proj.to(device)
         
         # Patch the model's forward method
         self._patch_model()
+    
+    def _get_model_device(self, model):
+        """Get device from model, handling ComfyUI ModelPatcher"""
+        # Check if this is a ComfyUI ModelPatcher
+        if hasattr(model, 'model') and hasattr(model.model, 'device'):
+            return model.model.device
+        elif hasattr(model, 'device'):
+            return model.device
+        elif hasattr(model, 'load_device'):
+            return model.load_device
+        else:
+            # Try to get device from first parameter
+            try:
+                if hasattr(model, 'model'):
+                    # It's a ModelPatcher, get the actual model
+                    actual_model = model.model
+                    if hasattr(actual_model, 'parameters'):
+                        return next(actual_model.parameters()).device
+                elif hasattr(model, 'parameters'):
+                    return next(model.parameters()).device
+            except StopIteration:
+                pass
+            # Default to CPU if we can't determine
+            return torch.device('cpu')
     
     def _patch_model(self):
         """Patch the model to intercept forward calls"""
