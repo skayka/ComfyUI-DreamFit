@@ -51,7 +51,7 @@ class DreamFitCheckpointLoader:
         }
     
     RETURN_TYPES = ("DREAMFIT_MODEL", "DREAMFIT_ENCODER", "DREAMFIT_CONFIG")
-    RETURN_NAMES = ("dreamfit_model", "encoder", "config")
+    RETURN_NAMES = ("dreamfit_model", "dreamfit_encoder", "dreamfit_config")
     FUNCTION = "load_checkpoint"
     CATEGORY = "DreamFit"
     
@@ -119,8 +119,10 @@ class DreamFitCheckpointLoader:
         }
         
         # Initialize encoder with weights
-        from ..dreamfit_core.models.anything_dressing_encoder import AnythingDressingEncoder
-        encoder_config = checkpoint.get("encoder_config", {})
+        from ..dreamfit_core.models.anything_dressing_encoder import AnythingDressingEncoder, EncoderConfig
+        encoder_config_dict = checkpoint.get("encoder_config", {})
+        # Create EncoderConfig object from dictionary
+        encoder_config = EncoderConfig(**encoder_config_dict) if encoder_config_dict else EncoderConfig()
         encoder = AnythingDressingEncoder(encoder_config)
         
         # Load encoder weights
@@ -132,7 +134,7 @@ class DreamFitCheckpointLoader:
         # Extract configuration
         config = {
             "model_type": model_name,
-            "encoder_config": encoder_config,
+            "encoder_config": encoder_config_dict,  # Use the dict version for serialization
             "attention_injection": checkpoint.get("attention_injection", {}),
             "lora_configs": checkpoint.get("lora_configs", {}),
             "dtype": dtype,
