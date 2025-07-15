@@ -154,9 +154,9 @@ class AnythingDressingEncoder(nn.Module):
             embed_dim=config.hidden_dim
         )
         
-        # Position embedding
+        # Position embedding (add 2 for cls_token and garment_token)
         self.pos_embed = nn.Parameter(
-            torch.zeros(1, self.patch_embed.num_patches + 1, config.hidden_dim)
+            torch.zeros(1, self.patch_embed.num_patches + 2, config.hidden_dim)
         )
         self.cls_token = nn.Parameter(torch.zeros(1, 1, config.hidden_dim))
         self.pos_drop = nn.Dropout(config.dropout)
