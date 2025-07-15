@@ -4,33 +4,28 @@ Garment-centric human generation nodes for ComfyUI using DreamFit with Flux
 Based on: https://github.com/bytedance/DreamFit
 """
 
-# Version info
-__version__ = "1.0.0"
-__author__ = "ComfyUI-DreamFit"
+# Import node mappings directly - ComfyUI expects these at module level
+from .nodes.dreamfit_loader import DreamFitCheckpointLoader, DreamFitModelValidator
+from .nodes.dreamfit_encode import DreamFitEncode
+from .nodes.dreamfit_adapter import DreamFitFluxAdapter
+from .nodes.dreamfit_sampler import DreamFitKSampler, DreamFitSamplerAdvanced
 
-# Only import these when ComfyUI loads the nodes
-NODE_CLASS_MAPPINGS = {}
-NODE_DISPLAY_NAME_MAPPINGS = {}
+NODE_CLASS_MAPPINGS = {
+    "DreamFitCheckpointLoader": DreamFitCheckpointLoader,
+    "DreamFitModelValidator": DreamFitModelValidator,
+    "DreamFitEncode": DreamFitEncode,
+    "DreamFitFluxAdapter": DreamFitFluxAdapter,
+    "DreamFitKSampler": DreamFitKSampler,
+    "DreamFitSamplerAdvanced": DreamFitSamplerAdvanced,
+}
 
-def init():
-    """Initialize the nodes - called by ComfyUI"""
-    try:
-        from .nodes import NODE_CLASS_MAPPINGS as node_mappings
-        from .nodes import NODE_DISPLAY_NAME_MAPPINGS as display_mappings
-        
-        NODE_CLASS_MAPPINGS.update(node_mappings)
-        NODE_DISPLAY_NAME_MAPPINGS.update(display_mappings)
-        
-        return True
-    except Exception as e:
-        print(f"[ComfyUI-DreamFit] Failed to load nodes: {e}")
-        return False
-
-# Try to initialize if we're being loaded by ComfyUI
-try:
-    init()
-except:
-    # This is fine - it means we're being imported outside of ComfyUI
-    pass
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "DreamFitCheckpointLoader": "DreamFit Checkpoint Loader",
+    "DreamFitModelValidator": "DreamFit Model Validator",
+    "DreamFitEncode": "DreamFit Encode",
+    "DreamFitFluxAdapter": "DreamFit Flux Adapter",
+    "DreamFitKSampler": "DreamFit K-Sampler",
+    "DreamFitSamplerAdvanced": "DreamFit Sampler Advanced",
+}
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
