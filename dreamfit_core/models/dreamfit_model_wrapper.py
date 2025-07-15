@@ -78,11 +78,21 @@ class DreamFitModelWrapper(nn.Module):
     
     def _patch_model(self):
         """Patch the model to intercept forward calls"""
+        # Check if this is a ComfyUI ModelPatcher
+        if hasattr(self.base_model, 'model'):
+            # It's a ModelPatcher, we need to patch the actual model
+            self.actual_model = self.base_model.model
+            self.is_model_patcher = True
+        else:
+            # It's a regular model
+            self.actual_model = self.base_model
+            self.is_model_patcher = False
+        
         # Store original forward
-        self.original_forward = self.base_model.forward
+        self.original_forward = self.actual_model.forward
         
         # Replace with our forward
-        self.base_model.forward = self._wrapped_forward
+        self.actual_model.forward = self._wrapped_forward
     
     def _wrapped_forward(self, *args, **kwargs):
         """Wrapped forward that handles read/write logic"""
@@ -170,14 +180,21 @@ class DreamFitModelWrapper(nn.Module):
     
     def forward(self, *args, **kwargs):
         """Forward through the base model"""
-        return self.base_model(*args, **kwargs)
+        # For ComfyUI compatibility, we need to handle ModelPatcher
+        if self.is_model_patcher:
+            # Let the ModelPatcher handle the forward call
+            return self.base_model(*args, **kwargs)
+        else:
+            # Direct model forward
+            return self.actual_model(*args, **kwargs)
     
     def __getattr__(self, name):
         """Delegate attribute access to base model"""
         if name in ['base_model', 'garment_features', 'garment_storage', 
                     'features_written', 'current_mode', 'original_forward',
                     'stored_args', 'stored_kwargs', 'garment_dim', 'hidden_dim',
-                    'garment_to_flux_k_proj', 'garment_to_flux_v_proj']:
+                    'garment_to_flux_k_proj', 'garment_to_flux_v_proj',
+                    'actual_model', 'is_model_patcher']:
             return super().__getattr__(name)
         return getattr(self.base_model, name)
 
