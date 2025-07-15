@@ -180,14 +180,19 @@ class DreamFitUnifiedV2:
             strength
         )
         
-        # Set up feature injection in model
-        self._setup_feature_injection(
-            enhanced_model,
-            garment_features,
-            injection_strength,
-            injection_mode,
-            checkpoint_data.get("injection_config", {})
-        )
+        # CRITICAL: Store garment features in the model for ComfyUI's sampling
+        # ComfyUI will pass this through the conditioning
+        enhanced_model.model.dreamfit_features = {
+            "garment_token": garment_features["garment_token"],
+            "patch_features": garment_features.get("patch_features"),
+            "pooled_features": garment_features.get("pooled_features"),
+            "injection_strength": injection_strength,
+            "injection_mode": injection_mode,
+            "pose_features": garment_features.get("pose_features"),
+        }
+        
+        # Mark the model as having DreamFit features
+        enhanced_model.model.dreamfit_enabled = True
         
         # Enhance conditioning with garment features
         enhanced_positive = self._enhance_conditioning(
@@ -281,6 +286,52 @@ class DreamFitUnifiedV2:
         print(f"Applied LoRA to {applied_count} attention layers")
         return enhanced_model
     
+    def _create_ip_adapter_hook(self, garment_token: torch.Tensor, injection_strength: float, layer_idx: int):
+        """Create a forward hook that injects garment features using IP-Adapter style"""
+        def hook_fn(module, input, output):
+            # Skip if not in generation mode
+            if not hasattr(module, '_dreamfit_active'):
+                return output
+            
+            try:
+                # Handle different output formats
+                if isinstance(output, tuple):
+                    hidden_states = output[0]
+                    rest = output[1:]
+                else:
+                    hidden_states = output
+                    rest = ()
+                
+                # Get the query from hidden states (assuming it's the image stream)
+                B, L, D = hidden_states.shape
+                
+                # Ensure garment token matches batch size
+                if garment_token.shape[0] == 1 and B > 1:
+                    garment_features = garment_token.repeat(B, 1, 1)
+                else:
+                    garment_features = garment_token[:B]
+                
+                # Simple cross-attention injection
+                # In real IP-Adapter, this would use proper K,V projections
+                # For now, we'll add the garment information directly
+                garment_influence = garment_features.mean(dim=1, keepdim=True)  # [B, 1, D]
+                garment_influence = garment_influence.expand(-1, L, -1)  # [B, L, D]
+                
+                # Apply injection with strength
+                modified_hidden = hidden_states + injection_strength * garment_influence
+                
+                # Return in original format
+                if rest:
+                    return (modified_hidden,) + rest
+                else:
+                    return modified_hidden
+                    
+            except Exception as e:
+                print(f"Error in DreamFit injection hook at layer {layer_idx}: {e}")
+                return output
+        
+        return hook_fn
+    
     def _is_attention_layer(self, name: str, module: nn.Module) -> bool:
         """Check if module is an attention layer that should get LoRA"""
         # Check for common attention layer patterns in Flux
@@ -317,18 +368,52 @@ class DreamFitUnifiedV2:
         injection_mode: str,
         injection_config: Dict
     ):
-        """Set up feature injection in the model"""
-        # Store injection configuration in model
-        model.dreamfit_injection = {
-            "garment_features": garment_features,
+        """Set up feature injection in the model using IP-Adapter style"""
+        # Extract garment token for cross-attention
+        garment_token = garment_features.get("garment_token")  # [B, 1, D]
+        
+        if garment_token is None:
+            print("Warning: No garment token found in features")
+            return
+        
+        # Store injection configuration
+        injection_data = {
+            "garment_token": garment_token,
+            "patch_features": garment_features.get("patch_features"),
             "injection_strength": injection_strength,
             "injection_mode": injection_mode,
             "injection_layers": injection_config.get("layers", [3, 6, 9, 12, 15, 18]),
             "active": True
         }
         
-        # Note: Actual injection happens during forward pass
-        # This is handled by custom attention processors or hooks
+        # Find double stream blocks in Flux model
+        double_stream_blocks = []
+        for name, module in model.named_modules():
+            if "double_stream" in name.lower() or "doublestream" in name.lower():
+                double_stream_blocks.append((name, module))
+        
+        if not double_stream_blocks:
+            # Fallback: find any attention blocks
+            for name, module in model.named_modules():
+                if any(key in name.lower() for key in ["attn", "attention", "transformer"]):
+                    double_stream_blocks.append((name, module))
+        
+        print(f"Found {len(double_stream_blocks)} potential injection points")
+        
+        # Apply IP-adapter style injection to selected layers
+        injected_count = 0
+        for idx, (name, module) in enumerate(double_stream_blocks):
+            if idx in injection_data["injection_layers"]:
+                # Create and register the injection hook
+                hook = self._create_ip_adapter_hook(
+                    garment_token,
+                    injection_strength,
+                    idx
+                )
+                module.register_forward_hook(hook)
+                injected_count += 1
+                
+        print(f"Injected DreamFit features into {injected_count} layers")
     
     def _enhance_conditioning(
         self,
@@ -350,7 +435,41 @@ class DreamFitUnifiedV2:
             # Create new extras with DreamFit features
             new_extras = extras.copy() if isinstance(extras, dict) else {}
             
-            # Add complete garment features
+            # CRITICAL: Add garment features in a way ComfyUI can use
+            # The garment_token should modify the conditioning directly
+            garment_token = garment_features["garment_token"]
+            pooled_features = garment_features.get("pooled_features")
+            
+            # Concatenate garment token to conditioning
+            # This ensures it's part of the actual conditioning passed to the model
+            if garment_token is not None:
+                # Ensure dimensions match
+                if cond_tensor.dim() == 2:
+                    cond_tensor = cond_tensor.unsqueeze(0)
+                if garment_token.dim() == 2:
+                    garment_token = garment_token.unsqueeze(0)
+                
+                # Match batch sizes
+                B = cond_tensor.shape[0]
+                if garment_token.shape[0] == 1 and B > 1:
+                    garment_token = garment_token.repeat(B, 1, 1)
+                elif garment_token.shape[0] > B:
+                    garment_token = garment_token[:B]
+                
+                # IMPORTANT: Concatenate garment token to conditioning sequence
+                # This is how IP-Adapter and similar methods work
+                enhanced_cond = torch.cat([cond_tensor, garment_token], dim=1)
+                
+                # If we have pooled features, also enhance them
+                if pooled_features is not None and "pooled_output" in new_extras:
+                    pooled = new_extras["pooled_output"]
+                    if pooled is not None:
+                        # Add garment influence to pooled output
+                        new_extras["pooled_output"] = pooled + injection_strength * pooled_features.mean(dim=0)
+            else:
+                enhanced_cond = cond_tensor
+            
+            # Also store features in extras for potential custom samplers
             new_extras["dreamfit_features"] = {
                 "garment_token": garment_features["garment_token"],
                 "pooled_features": garment_features["pooled_features"],
@@ -360,7 +479,7 @@ class DreamFitUnifiedV2:
                 "pose_features": garment_features.get("pose_features"),
             }
             
-            enhanced_conditioning.append([cond_tensor, new_extras])
+            enhanced_conditioning.append([enhanced_cond, new_extras])
         
         return enhanced_conditioning
     

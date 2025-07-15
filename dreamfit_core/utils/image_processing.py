@@ -48,8 +48,6 @@ def preprocess_garment_image(
             image = image / 255.0
     
     elif isinstance(image, torch.Tensor):
-        print(f"Input tensor shape: {image.shape}, dtype: {image.dtype}")
-        
         # Ensure 4D tensor
         if image.ndim == 3:
             image = image.unsqueeze(0)
@@ -57,18 +55,14 @@ def preprocess_garment_image(
         # Handle ComfyUI format [B, H, W, C] -> [B, C, H, W]
         if image.ndim == 4:
             if image.shape[-1] == 3:  # [B, H, W, C] format
-                print(f"Converting from ComfyUI format [B, H, W, C] to [B, C, H, W]")
                 image = image.permute(0, 3, 1, 2)
             elif image.shape[1] != 3 and image.shape[1] != 1:  # Unexpected channel count
-                print(f"Warning: Unexpected channel count: {image.shape[1]}")
                 # Try to detect if it's in wrong format
                 if image.shape[3] == 3:
-                    print(f"Image seems to already be in [B, C, H, W] format but marked as needing conversion")
-                    # Don't permute
+                    # Image seems to already be in [B, C, H, W] format
+                    pass
                 else:
-                    print(f"Cannot determine correct format for shape: {image.shape}")
-        
-        print(f"After format conversion: {image.shape}")
+                    print(f"Warning: Cannot determine correct format for shape: {image.shape}")
         
         # Ensure float
         image = image.float()
