@@ -189,4 +189,4 @@ input/
 
 # DreamFit specific cache
 .cache/
-model_cache/
+model_cache/DreamFit-official/
