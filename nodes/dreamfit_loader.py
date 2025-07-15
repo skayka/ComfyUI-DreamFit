@@ -49,7 +49,7 @@ class DreamFitCheckpointLoader:
             }
         }
     
-    RETURN_TYPES = ("DREAMFIT_MODEL", "DREAMFIT_ENCODER", "DREAMFIT_CONFIG")
+    RETURN_TYPES = ("DREAMFIT_MODEL", "DREAMFIT_MODEL", "DREAMFIT_MODEL")
     RETURN_NAMES = ("dreamfit_model", "encoder", "config")
     FUNCTION = "load_checkpoint"
     CATEGORY = "DreamFit"
@@ -148,6 +148,7 @@ class DreamFitModelValidator:
     
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("info",)
+    OUTPUT_NODE = True
     FUNCTION = "validate"
     CATEGORY = "DreamFit/Debug"
     OUTPUT_NODE = True

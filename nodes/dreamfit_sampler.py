@@ -155,28 +155,9 @@ class DreamFitKSampler:
         Returns:
             Modified positive conditioning
         """
-        # Clone the conditioning to avoid modifying the original
-        import copy
-        positive_modified = copy.deepcopy(positive)
-        
-        # Add DreamFit information to conditioning
-        # This is a simplified approach - actual implementation would
-        # depend on how ComfyUI structures conditioning
-        
-        for i, cond in enumerate(positive_modified):
-            if isinstance(cond, list) and len(cond) >= 2:
-                # cond[0] is the conditioning tensor
-                # cond[1] is the metadata dict
-                
-                # Add DreamFit metadata
-                if isinstance(cond[1], dict):
-                    cond[1]["dreamfit"] = {
-                        "garment_features": dreamfit_conditioning["garment_features"],
-                        "injection_config": dreamfit_conditioning["injection_config"],
-                        "text_prompt": dreamfit_conditioning["text_prompt"]
-                    }
-        
-        return positive_modified
+        # For now, just return the original conditioning
+        # TODO: Implement proper DreamFit conditioning integration
+        return positive
     
     def _configure_flux_sampling(self, model):
         """
@@ -381,28 +362,9 @@ class DreamFitSamplerAdvanced:
         injection_schedule: str
     ):
         """Apply advanced DreamFit conditioning"""
-        import copy
-        positive_modified = copy.deepcopy(positive)
-        
-        # Configure injection schedule
-        schedule_config = {
-            "constant": lambda t: 1.0,
-            "linear": lambda t: 1.0 - t,
-            "cosine": lambda t: np.cos(t * np.pi / 2),
-            "step": lambda t: 1.0 if t < 0.5 else 0.5
-        }
-        
-        for i, cond in enumerate(positive_modified):
-            if isinstance(cond, list) and len(cond) >= 2 and isinstance(cond[1], dict):
-                cond[1]["dreamfit"] = {
-                    "garment_features": dreamfit_conditioning["garment_features"],
-                    "injection_config": dreamfit_conditioning["injection_config"],
-                    "text_prompt": dreamfit_conditioning["text_prompt"],
-                    "injection_schedule": injection_schedule,
-                    "schedule_fn": schedule_config.get(injection_schedule, schedule_config["constant"])
-                }
-        
-        return positive_modified
+        # For now, just return the original conditioning
+        # TODO: Implement proper DreamFit conditioning integration with schedules
+        return positive
     
     def _generate_noise(
         self,
