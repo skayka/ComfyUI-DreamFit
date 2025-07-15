@@ -25,6 +25,37 @@ This workflow uses the new **DreamFit Unified** node which properly integrates w
 6. KSampler → Generate
 7. VAEDecode → Decode to image
 
+### 0.1. Unified V2 Workflow (`dreamfit_unified_v2_workflow.json`)
+**Best for:** Latest DreamFit implementation with enhanced features and debug capabilities
+
+This workflow uses the newest **DreamFit Unified V2** node which provides the most accurate implementation based on the official DreamFit codebase.
+
+**Key Features:**
+- Self-contained checkpoint loading (encoder + LoRA + configs)
+- Automatic 224x224 garment preprocessing
+- 5 outputs including debug visualization and custom DREAMFIT_FEATURES type
+- Enhanced attention injection mechanisms
+- Support for all three checkpoint types (flux_i2i, flux_i2i_with_pose, flux_tryon)
+
+**New in V2:**
+- Debug visualization grid showing:
+  - Original garment image
+  - Processed garment (224x224)
+  - Attention heatmap
+  - Model pose (if provided)
+- DREAMFIT_FEATURES output for advanced node chaining
+- Improved LoRA weight application
+- More accurate feature injection
+
+**Node chain:**
+1. UNETLoader → Load Flux diffusion model
+2. DualCLIPLoader → Load CLIP models
+3. VAELoader → Load VAE
+4. CLIPTextEncode → Create conditioning
+5. DreamFitUnifiedV2 → Enhanced processing with debug output
+6. KSampler → Generate
+7. VAEDecode → Decode to image
+
 ### 1. Simple Workflow (`dreamfit_simple_workflow.json`)
 **Best for:** Quick testing and basic garment generation
 

@@ -12,6 +12,7 @@ from .nodes.dreamfit_sampler import DreamFitKSampler, DreamFitSamplerAdvanced
 from .nodes.dreamfit_adapter_v2 import DreamFitFluxAdapterV2
 from .nodes.dreamfit_adapter_v3 import DreamFitFluxAdapterV3
 from .nodes.dreamfit_unified import DreamFitUnified
+from .nodes.dreamfit_unified_v2 import DreamFitUnifiedV2
 from .nodes.dreamfit_simple import DreamFitSimple
 
 # A dictionary that contains all nodes you want to export with their names
@@ -26,6 +27,7 @@ NODE_CLASS_MAPPINGS = {
     "DreamFitFluxAdapterV2": DreamFitFluxAdapterV2,
     "DreamFitFluxAdapterV3": DreamFitFluxAdapterV3,
     "DreamFitUnified": DreamFitUnified,
+    "DreamFitUnifiedV2": DreamFitUnifiedV2,
     "DreamFitSimple": DreamFitSimple,
 }
 
@@ -40,6 +42,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DreamFitFluxAdapterV2": "DreamFit Flux Adapter V2",
     "DreamFitFluxAdapterV3": "DreamFit Flux Adapter V3",
     "DreamFitUnified": "DreamFit Unified",
+    "DreamFitUnifiedV2": "DreamFit Unified V2",
     "DreamFitSimple": "DreamFit Simple",
 }
 
