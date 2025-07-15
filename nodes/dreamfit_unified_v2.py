@@ -180,19 +180,12 @@ class DreamFitUnifiedV2:
             strength
         )
         
-        # CRITICAL: Store garment features in the model for ComfyUI's sampling
-        # ComfyUI will pass this through the conditioning
-        enhanced_model.model.dreamfit_features = {
-            "garment_token": garment_features["garment_token"],
-            "patch_features": garment_features.get("patch_features"),
-            "pooled_features": garment_features.get("pooled_features"),
-            "injection_strength": injection_strength,
-            "injection_mode": injection_mode,
-            "pose_features": garment_features.get("pose_features"),
-        }
-        
-        # Mark the model as having DreamFit features
-        enhanced_model.model.dreamfit_enabled = True
+        # Store garment features in model for compatibility
+        if hasattr(enhanced_model, 'model'):
+            enhanced_model.model.dreamfit_features = garment_features
+            enhanced_model.model.dreamfit_enabled = True
+            enhanced_model.model.injection_strength = injection_strength
+            enhanced_model.model.injection_mode = injection_mode
         
         # Enhance conditioning with garment features
         enhanced_positive = self._enhance_conditioning(

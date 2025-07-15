@@ -1,0 +1,379 @@
+{
+  "last_node_id": 12,
+  "last_link_id": 15,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [50, 50],
+      "size": {"0": 315, "1": 82},
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [1],
+          "slot_index": 0
+        }
+      ],
+      "properties": {"Node name for S&R": "UNETLoader"},
+      "widgets_values": ["flux1-dev.safetensors", "default"]
+    },
+    {
+      "id": 2,
+      "type": "DualCLIPLoader",
+      "pos": [50, 200],
+      "size": {"0": 315, "1": 106},
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [2, 3],
+          "slot_index": 0
+        }
+      ],
+      "properties": {"Node name for S&R": "DualCLIPLoader"},
+      "widgets_values": ["t5xxl_fp16.safetensors", "clip_l.safetensors", "flux"]
+    },
+    {
+      "id": 3,
+      "type": "VAELoader",
+      "pos": [50, 350],
+      "size": {"0": 315, "1": 58},
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [14],
+          "slot_index": 0
+        }
+      ],
+      "properties": {"Node name for S&R": "VAELoader"},
+      "widgets_values": ["ae.safetensors"]
+    },
+    {
+      "id": 4,
+      "type": "LoadImage",
+      "pos": [50, 500],
+      "size": {"0": 315, "1": 314},
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [4],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["garment.png", "image"]
+    },
+    {
+      "id": 5,
+      "type": "CLIPTextEncode",
+      "pos": [400, 200],
+      "size": {"0": 400, "1": 200},
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [5],
+          "slot_index": 0
+        }
+      ],
+      "properties": {"Node name for S&R": "CLIPTextEncode"},
+      "widgets_values": ["A person wearing the garment, fashion photography, professional lighting"]
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncode",
+      "pos": [400, 450],
+      "size": {"0": 400, "1": 200},
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [6],
+          "slot_index": 0
+        }
+      ],
+      "properties": {"Node name for S&R": "CLIPTextEncode"},
+      "widgets_values": ["blurry, low quality, distorted, deformed"]
+    },
+    {
+      "id": 7,
+      "type": "DreamFitUnifiedV2",
+      "pos": [850, 200],
+      "size": {"0": 400, "1": 350},
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 5
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 6
+        },
+        {
+          "name": "garment_image",
+          "type": "IMAGE",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [7],
+          "slot_index": 0
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": [8],
+          "slot_index": 1
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "links": [9],
+          "slot_index": 2
+        },
+        {
+          "name": "debug_visualization",
+          "type": "IMAGE",
+          "links": [],
+          "slot_index": 3
+        },
+        {
+          "name": "garment_features",
+          "type": "DREAMFIT_FEATURES",
+          "links": [15],
+          "slot_index": 4
+        }
+      ],
+      "properties": {"Node name for S&R": "DreamFitUnifiedV2"},
+      "widgets_values": ["flux_i2i", 1.0, 1.0, "adaptive", false]
+    },
+    {
+      "id": 8,
+      "type": "EmptyLatentImage",
+      "pos": [850, 600],
+      "size": {"0": 315, "1": 106},
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [10],
+          "slot_index": 0
+        }
+      ],
+      "properties": {"Node name for S&R": "EmptyLatentImage"},
+      "widgets_values": [1024, 1024, 1]
+    },
+    {
+      "id": 9,
+      "type": "DreamFitKSamplerV2",
+      "pos": [1300, 200],
+      "size": {"0": 315, "1": 524},
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 7
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 8
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 9
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 10
+        },
+        {
+          "name": "garment_features",
+          "type": "DREAMFIT_FEATURES",
+          "link": 15
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [11],
+          "slot_index": 0
+        }
+      ],
+      "properties": {"Node name for S&R": "DreamFitKSamplerV2"},
+      "widgets_values": [156680208700286, "randomize", 20, 1, "euler", "normal", 1]
+    },
+    {
+      "id": 10,
+      "type": "VAEDecode",
+      "pos": [1650, 200],
+      "size": {"0": 210, "1": 46},
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 11
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [12],
+          "slot_index": 0
+        }
+      ],
+      "properties": {"Node name for S&R": "VAEDecode"}
+    },
+    {
+      "id": 11,
+      "type": "SaveImage",
+      "pos": [1900, 200],
+      "size": {"0": 315, "1": 270},
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 12
+        }
+      ],
+      "properties": {},
+      "widgets_values": ["DreamFit_V2_Sampler"]
+    },
+    {
+      "id": 12,
+      "type": "Note",
+      "pos": [50, 850],
+      "size": {"0": 400, "1": 200},
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "properties": {"text": ""},
+      "widgets_values": ["DreamFit V2 Sampler Workflow\n\nThis workflow uses the new DreamFitKSamplerV2 which implements the proper read/write mechanism from the official DreamFit.\n\nKey differences:\n- First denoising step stores garment features (write mode)\n- Subsequent steps use stored features (read mode)\n- Garment features are passed directly to the sampler\n- Supports all standard samplers and schedulers\n\nAdjust injection_strength in DreamFitUnifiedV2 to control garment influence."]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 7, 0, "MODEL"],
+    [2, 2, 0, 5, 0, "CLIP"],
+    [3, 2, 0, 6, 0, "CLIP"],
+    [4, 4, 0, 7, 3, "IMAGE"],
+    [5, 5, 0, 7, 1, "CONDITIONING"],
+    [6, 6, 0, 7, 2, "CONDITIONING"],
+    [7, 7, 0, 9, 0, "MODEL"],
+    [8, 7, 1, 9, 1, "CONDITIONING"],
+    [9, 7, 2, 9, 2, "CONDITIONING"],
+    [10, 8, 0, 9, 3, "LATENT"],
+    [11, 9, 0, 10, 0, "LATENT"],
+    [12, 10, 0, 11, 0, "IMAGE"],
+    [14, 3, 0, 10, 1, "VAE"],
+    [15, 7, 4, 9, 4, "DREAMFIT_FEATURES"]
+  ],
+  "groups": [
+    {
+      "title": "Model Loading",
+      "bounding": [40, -10, 340, 440],
+      "color": "#3f789e"
+    },
+    {
+      "title": "Garment Input",
+      "bounding": [40, 440, 340, 390],
+      "color": "#8A8"
+    },
+    {
+      "title": "Text Conditioning",
+      "bounding": [390, 140, 420, 530],
+      "color": "#b58b2a"
+    },
+    {
+      "title": "DreamFit Processing",
+      "bounding": [840, 140, 420, 480],
+      "color": "#a1309b"
+    },
+    {
+      "title": "V2 Sampling",
+      "bounding": [1290, 140, 340, 600],
+      "color": "#b06634"
+    },
+    {
+      "title": "Output",
+      "bounding": [1640, 140, 590, 340],
+      "color": "#8AA"
+    }
+  ],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
