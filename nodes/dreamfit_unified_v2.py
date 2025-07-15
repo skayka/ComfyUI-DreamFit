@@ -198,13 +198,22 @@ class DreamFitUnifiedV2:
         )
         
         # Create debug visualization
-        debug_viz = self._create_debug_visualization(
-            garment_image,
-            processed_garment,
-            encoder_output.get("attention_weights", {}),
-            model_image,
-            debug_mode
-        )
+        try:
+            debug_viz = self._create_debug_visualization(
+                garment_image,
+                processed_garment,
+                encoder_output.get("attention_weights", {}),
+                model_image,
+                debug_mode
+            )
+        except Exception as e:
+            print(f"Warning: Debug visualization failed: {e}")
+            print(f"Garment image shape: {garment_image.shape}")
+            print(f"Processed garment shape: {processed_garment.shape}")
+            if model_image is not None:
+                print(f"Model image shape: {model_image.shape}")
+            # Return original garment image as fallback
+            debug_viz = garment_image
         
         # Create DreamFitFeatures object for output
         dreamfit_features_output = DreamFitFeatures(garment_features)
@@ -368,114 +377,126 @@ class DreamFitUnifiedV2:
             # Return minimal debug image if not in debug mode
             return original_garment
         
-        # Handle ComfyUI format [B, H, W, C] -> [B, C, H, W]
-        if original_garment.dim() == 4 and original_garment.shape[-1] == 3:
-            original_garment = original_garment.permute(0, 3, 1, 2)
+        try:
+            # Handle ComfyUI format [B, H, W, C] -> [B, C, H, W]
+            if original_garment.dim() == 4 and original_garment.shape[-1] == 3:
+                original_garment_viz = original_garment.permute(0, 3, 1, 2)
+            else:
+                original_garment_viz = original_garment.clone()
+            
+            B, C, H, W = original_garment_viz.shape
+            device = original_garment_viz.device
         
-        B, C, H, W = original_garment.shape
-        device = original_garment.device
+            # Denormalize processed garment for visualization
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
+            processed_viz = processed_garment * std + mean
+            processed_viz = processed_viz.clamp(0, 1)
+            
+            # Create attention heatmap
+            heatmap = self._create_attention_heatmap(attention_weights, (H, W))
+            
+            # Prepare images for grid
+            images = []
+            
+            # Top-left: Original garment
+            images.append(original_garment_viz[0])
         
-        # Denormalize processed garment for visualization
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
-        processed_viz = processed_garment * std + mean
-        processed_viz = processed_viz.clamp(0, 1)
-        
-        # Create attention heatmap
-        heatmap = self._create_attention_heatmap(attention_weights, (H, W))
-        
-        # Prepare images for grid
-        images = []
-        
-        # Top-left: Original garment
-        images.append(original_garment[0])
-        
-        # Top-right: Processed garment (upscaled to match)
-        processed_resized = F.interpolate(
-            processed_viz,
-            size=(H, W),
-            mode='bilinear',
-            align_corners=False
-        )
-        images.append(processed_resized[0])
-        
-        # Bottom-left: Attention heatmap
-        images.append(heatmap)
-        
-        # Bottom-right: Model image or placeholder
-        if model_image is not None:
-            if model_image.dim() == 4 and model_image.shape[-1] == 3:
-                model_image = model_image.permute(0, 3, 1, 2)
-            # Ensure model image matches the size
-            if model_image.shape[-2:] != (H, W):
-                model_image = F.interpolate(model_image, size=(H, W), mode='bilinear', align_corners=False)
-            images.append(model_image[0])
-        else:
-            # Create placeholder
-            placeholder = torch.zeros_like(images[0])
-            # Add text or pattern to indicate no model image
-            placeholder[:, H//3:2*H//3, W//3:2*W//3] = 0.2
-            images.append(placeholder)
-        
-        # Create 2x2 grid
-        grid = torch.zeros(3, 2*H, 2*W, device=device)
-        grid[:, :H, :W] = images[0]
-        grid[:, :H, W:] = images[1]
-        grid[:, H:, :W] = images[2]
-        grid[:, H:, W:] = images[3]
-        
-        # Convert back to ComfyUI format [B, H, W, C]
-        grid = grid.unsqueeze(0).permute(0, 2, 3, 1)
-        
-        return grid
+            # Top-right: Processed garment (upscaled to match)
+            processed_resized = F.interpolate(
+                processed_viz,
+                size=(H, W),
+                mode='bilinear',
+                align_corners=False
+            )
+            images.append(processed_resized[0])
+            
+            # Bottom-left: Attention heatmap
+            images.append(heatmap)
+            
+            # Bottom-right: Model image or placeholder
+            if model_image is not None:
+                if model_image.dim() == 4 and model_image.shape[-1] == 3:
+                    model_image = model_image.permute(0, 3, 1, 2)
+                # Ensure model image matches the size
+                if model_image.shape[-2:] != (H, W):
+                    model_image = F.interpolate(model_image, size=(H, W), mode='bilinear', align_corners=False)
+                images.append(model_image[0])
+            else:
+                # Create placeholder
+                placeholder = torch.zeros_like(images[0])
+                # Add text or pattern to indicate no model image
+                placeholder[:, H//3:2*H//3, W//3:2*W//3] = 0.2
+                images.append(placeholder)
+            
+            # Create 2x2 grid
+            grid = torch.zeros(3, 2*H, 2*W, device=device)
+            grid[:, :H, :W] = images[0]
+            grid[:, :H, W:] = images[1]
+            grid[:, H:, :W] = images[2]
+            grid[:, H:, W:] = images[3]
+            
+            # Convert back to ComfyUI format [B, H, W, C]
+            grid = grid.unsqueeze(0).permute(0, 2, 3, 1)
+            
+            return grid
+        except Exception as e:
+            print(f"Error in debug visualization: {e}")
+            # Return original image as fallback
+            return original_garment
     
     def _create_attention_heatmap(self, attention_weights: Dict, size: Tuple[int, int]) -> torch.Tensor:
         """Create attention heatmap from weights"""
         H, W = size
         
-        if not attention_weights:
-            # Return gray image if no attention weights
+        try:
+            if not attention_weights:
+                # Return gray image if no attention weights
+                return torch.ones(3, H, W) * 0.5
+            
+            # Get the last layer's attention (usually most informative)
+            last_layer_key = max(attention_weights.keys()) if attention_weights else None
+            if last_layer_key is None:
+                return torch.ones(3, H, W) * 0.5
+            
+            attn = attention_weights[last_layer_key]
+            
+            # Average attention across heads and reshape
+            if attn.dim() == 4:  # [B, heads, seq, seq]
+                attn = attn.mean(dim=1)  # Average across heads
+            
+            # Take attention to garment token (index 1)
+            if attn.shape[-1] > 1:
+                garment_attn = attn[0, :, 1]  # Attention from all positions to garment token
+            else:
+                garment_attn = attn[0, 0]
+            
+            # Reshape to spatial dimensions
+            num_patches = int(np.sqrt(garment_attn.shape[0] - 2))  # Subtract CLS and garment tokens
+            if num_patches * num_patches + 2 == garment_attn.shape[0]:
+                spatial_attn = garment_attn[2:].reshape(num_patches, num_patches)
+            else:
+                # Fallback if shape doesn't match
+                spatial_attn = torch.ones(16, 16) * 0.5
+            
+            # Upsample to target size
+            spatial_attn = spatial_attn.unsqueeze(0).unsqueeze(0)
+            heatmap = F.interpolate(spatial_attn, size=(H, W), mode='bilinear', align_corners=False)
+            
+            # Normalize and convert to RGB
+            heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
+            
+            # Apply colormap (simple red-yellow-white)
+            heatmap_rgb = torch.zeros(3, H, W)
+            heatmap_rgb[0] = heatmap[0, 0]  # Red channel
+            heatmap_rgb[1] = heatmap[0, 0] * 0.5  # Green channel
+            heatmap_rgb[2] = 0  # Blue channel
+            
+            return heatmap_rgb
+        except Exception as e:
+            print(f"Error creating attention heatmap: {e}")
+            # Return gray fallback
             return torch.ones(3, H, W) * 0.5
-        
-        # Get the last layer's attention (usually most informative)
-        last_layer_key = max(attention_weights.keys()) if attention_weights else None
-        if last_layer_key is None:
-            return torch.ones(3, H, W) * 0.5
-        
-        attn = attention_weights[last_layer_key]
-        
-        # Average attention across heads and reshape
-        if attn.dim() == 4:  # [B, heads, seq, seq]
-            attn = attn.mean(dim=1)  # Average across heads
-        
-        # Take attention to garment token (index 1)
-        if attn.shape[-1] > 1:
-            garment_attn = attn[0, :, 1]  # Attention from all positions to garment token
-        else:
-            garment_attn = attn[0, 0]
-        
-        # Reshape to spatial dimensions
-        num_patches = int(np.sqrt(garment_attn.shape[0] - 2))  # Subtract CLS and garment tokens
-        if num_patches * num_patches + 2 == garment_attn.shape[0]:
-            spatial_attn = garment_attn[2:].reshape(num_patches, num_patches)
-        else:
-            # Fallback if shape doesn't match
-            spatial_attn = torch.ones(16, 16) * 0.5
-        
-        # Upsample to target size
-        spatial_attn = spatial_attn.unsqueeze(0).unsqueeze(0)
-        heatmap = F.interpolate(spatial_attn, size=(H, W), mode='bilinear', align_corners=False)
-        
-        # Normalize and convert to RGB
-        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
-        
-        # Apply colormap (simple red-yellow-white)
-        heatmap_rgb = torch.zeros(3, H, W)
-        heatmap_rgb[0] = heatmap[0, 0]  # Red channel
-        heatmap_rgb[1] = heatmap[0, 0] * 0.5  # Green channel
-        heatmap_rgb[2] = 0  # Blue channel
-        
-        return heatmap_rgb
     
     @classmethod
     def IS_CHANGED(cls, **kwargs):
