@@ -238,20 +238,62 @@ class DreamFitSampler:
             # Run DreamFit two-pass sampling
             print(f"Running DreamFit {mode} sampling for {steps} steps...")
             print(f"Model type: {type(actual_model)}")
-            print(f"Model attributes: {dir(actual_model)[:10]}...")  # First 10 attributes
+            print(f"Is callable: {callable(actual_model)}")
             
-            with torch.no_grad():
-                samples = denoise(
-                    model=actual_model,
-                    inp_person=inp_person,
-                    inp_cloth=inp_cloth,
-                    neg_inp_cond=neg_inp_cond,
-                    timesteps=timesteps,
-                    guidance=cfg,
-                    true_gs=3.5,  # From DreamFit config
-                    timestep_to_start_cfg=51,  # From DreamFit config
-                    num_steps=steps
-                )
+            # Check if model has a forward method or diffusion_model attribute
+            if hasattr(actual_model, 'diffusion_model'):
+                print(f"Found diffusion_model: {type(actual_model.diffusion_model)}")
+                if hasattr(actual_model.diffusion_model, 'forward'):
+                    print("diffusion_model has forward method")
+            
+            # The issue is that ComfyUI's model expects different calling convention
+            # DreamFit expects model(img=..., txt=..., etc)
+            # But ComfyUI might expect model.forward(...) or a different interface
+            
+            # For now, let's try to understand what's available
+            if hasattr(actual_model, 'forward'):
+                print("Model has forward method")
+            if hasattr(actual_model, '__call__'):
+                print("Model has __call__ method")
+            
+            # Debug: Let's see what we're actually passing
+            print(f"About to call denoise with:")
+            print(f"  - model type: {type(actual_model)}")
+            print(f"  - model callable: {callable(actual_model)}")
+            print(f"  - model dir: {dir(actual_model)[:20]}...")  # First 20 attributes
+            print(f"  - guidance (cfg): {cfg} (type: {type(cfg)})")
+            print(f"  - true_gs: {3.5} (type: {type(3.5)})")
+            print(f"  - timesteps length: {len(timesteps)}")
+            print(f"  - timesteps sample: {timesteps[:5] if len(timesteps) > 5 else timesteps}")
+            print(f"  - inp_person keys: {inp_person.keys()}")
+            print(f"  - inp_cloth keys: {inp_cloth.keys()}")
+            
+            # Check if model has the expected Flux structure
+            if hasattr(actual_model, 'double_blocks'):
+                print(f"  - double_blocks: {len(actual_model.double_blocks)}")
+            if hasattr(actual_model, 'single_blocks'):
+                print(f"  - single_blocks: {len(actual_model.single_blocks)}")
+            
+            # Add try-except to get more detailed error info
+            try:
+                with torch.no_grad():
+                    samples = denoise(
+                        model=actual_model,
+                        inp_person=inp_person,
+                        inp_cloth=inp_cloth,
+                        neg_inp_cond=neg_inp_cond,
+                        timesteps=timesteps,
+                        guidance=cfg,
+                        true_gs=3.5,  # From DreamFit config
+                        timestep_to_start_cfg=51,  # From DreamFit config
+                        num_steps=steps
+                    )
+            except TypeError as e:
+                print(f"TypeError details: {e}")
+                print(f"Error args: {e.args}")
+                import traceback
+                traceback.print_exc()
+                raise
             
             print("Sampling complete!")
             
