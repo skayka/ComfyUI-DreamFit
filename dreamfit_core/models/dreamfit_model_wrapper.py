@@ -96,21 +96,49 @@ class DreamFitModelWrapper(nn.Module):
     
     def _wrapped_forward(self, *args, **kwargs):
         """Wrapped forward that handles read/write logic"""
-        # Simplified version - just store features in write mode, pass through in read mode
-        # This avoids the matrix multiplication shape issues
         
         if self.current_mode == "write":
-            # Store args/kwargs for later use, but don't modify the output
-            self.garment_storage["write_args"] = args
-            self.garment_storage["write_kwargs"] = kwargs
+            # Store the model output for later injection
+            output = self.original_forward(*args, **kwargs)
+            self.garment_storage["write_output"] = output.clone() if output is not None else None
             self.features_written = True
+            return output
+            
         elif self.current_mode == "neg_write":
-            # Store negative conditioning args/kwargs
-            self.garment_storage["neg_write_args"] = args
-            self.garment_storage["neg_write_kwargs"] = kwargs
+            # Store negative conditioning output
+            output = self.original_forward(*args, **kwargs)
+            self.garment_storage["neg_write_output"] = output.clone() if output is not None else None
+            return output
+            
+        elif self.current_mode == "read" and self.features_written:
+            # Get the base output
+            output = self.original_forward(*args, **kwargs)
+            
+            # Inject stored garment features
+            if "write_output" in self.garment_storage and self.garment_storage["write_output"] is not None:
+                stored_output = self.garment_storage["write_output"]
+                if output.shape == stored_output.shape:
+                    # Blend the outputs - this is where garment features get injected
+                    injection_strength = self.garment_features.get("injection_strength", 0.5)
+                    output = output + injection_strength * (stored_output - output)
+            
+            return output
+            
+        elif self.current_mode == "neg_read" and self.features_written:
+            # Similar for negative conditioning
+            output = self.original_forward(*args, **kwargs)
+            
+            if "neg_write_output" in self.garment_storage and self.garment_storage["neg_write_output"] is not None:
+                stored_output = self.garment_storage["neg_write_output"]
+                if output.shape == stored_output.shape:
+                    injection_strength = self.garment_features.get("injection_strength", 0.5)
+                    output = output + injection_strength * (stored_output - output)
+            
+            return output
         
-        # Always call original forward without modification to avoid shape issues
-        return self.original_forward(*args, **kwargs)
+        else:
+            # Normal forward pass
+            return self.original_forward(*args, **kwargs)
     
     def _forward_write_mode(self, *args, **kwargs):
         """Forward pass in write mode - stores garment features"""
