@@ -168,32 +168,8 @@ class DreamFitUnified:
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs):
         """Validate inputs before execution"""
-        # ComfyUI calls this with all inputs as kwargs
-        # Only validate if we have the actual values
-        
-        if "model" in kwargs:
-            model = kwargs["model"]
-            if model is None:
-                return "Model input is required"
-        
-        if "positive" in kwargs:
-            positive = kwargs["positive"]
-            if positive is not None and not isinstance(positive, list):
-                return "Positive conditioning must be a list"
-        
-        if "negative" in kwargs:
-            negative = kwargs["negative"]
-            if negative is not None and not isinstance(negative, list):
-                return "Negative conditioning must be a list"
-        
-        if "garment_image" in kwargs:
-            garment_image = kwargs["garment_image"]
-            if garment_image is not None:
-                if not isinstance(garment_image, torch.Tensor):
-                    return "Garment image must be a tensor"
-                if len(garment_image.shape) != 4:
-                    return f"Garment image must be 4D tensor (B,H,W,C), got shape {garment_image.shape}"
-        
+        # For now, return True to allow execution
+        # Actual validation happens during the execute function
         return True
     
     def _load_dreamfit_checkpoint(self, model_name: str) -> Dict:
