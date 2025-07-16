@@ -4,14 +4,9 @@ Proper implementation following DreamFit's two-phase denoising approach
 """
 
 import torch
-import torch.nn.functional as F
-from typing import Dict, Optional, Any, Tuple, List
-import comfy.sample
+from typing import Dict, Optional, Any
 import comfy.samplers
 import comfy.model_management
-import comfy.model_patcher
-from tqdm import tqdm
-import numpy as np
 from ..dreamfit_core.models.dreamfit_model_wrapper import DreamFitModelWrapper
 
 
@@ -290,74 +285,51 @@ class DreamFitKSamplerV3:
         
         # Extract latent
         latent = latent_image["samples"]
-        print(f"DEBUG: Latent shape: {latent.shape}, dtype: {latent.dtype}, device: {latent.device}")
         
         # Convert DreamFitFeatures object to dict if needed
         if garment_features is not None and hasattr(garment_features, 'to_dict'):
             garment_features = garment_features.to_dict()
         
-        # Get timesteps
-        timesteps = self.get_timesteps(scheduler, steps, denoise)
-        timesteps = timesteps.to(device)
-        
         # If we have a pre-encoded garment latent, store it in features
         if garment_latent is not None and garment_features is not None:
-            garment_features["garment_latent"] = garment_latent["samples"]
+            # Ensure garment latent is on correct device
+            garment_samples = garment_latent["samples"].to(device=device, dtype=latent.dtype)
+            garment_features["garment_latent"] = garment_samples
         
-        # Use ComfyUI's standard sampling with our wrapped model
+        # Use ComfyUI's standard sampling - temporarily disable wrapper to debug black images
         if garment_features is not None:
-            # Wrap model with DreamFit functionality
-            wrapped_model = DreamFitModelWrapper(model, garment_features)
-            
-            # Do the write phase first
-            wrapped_model.set_mode("write")
-            with torch.no_grad():
-                # Use garment latent if provided
-                if garment_features is not None and "garment_latent" in garment_features:
-                    garment_latent = garment_features["garment_latent"].to(device)
-                else:
-                    garment_latent = torch.randn_like(latent)
-                
-                # Extract conditioning
-                if isinstance(positive, list) and len(positive) > 0:
-                    pos_cond = positive[0][0] if isinstance(positive[0], list) else positive[0]
-                else:
-                    pos_cond = None
-                
-                # Call wrapped model to store features
-                try:
-                    if hasattr(wrapped_model, 'apply_model'):
-                        _ = wrapped_model.apply_model(garment_latent, torch.tensor([999.0], device=device), c={'c_crossattn': [pos_cond]})
-                    else:
-                        print("Warning: Could not perform write phase")
-                except Exception as e:
-                    print(f"Warning: Write phase failed: {e}")
-            
-            # Switch to read mode
-            wrapped_model.set_mode("read")
+            print("DEBUG: Garment features detected, but using unwrapped model to debug black images")
+            # TODO: Re-enable wrapper once black image issue is resolved
+            # For now, just use the original model to see if we get normal images
             
             # Use nodes.common_ksampler for better compatibility
-            import nodes
-            if hasattr(nodes, 'common_ksampler'):
-                denoised = nodes.common_ksampler(
-                    model=wrapped_model,
-                    seed=seed,
-                    steps=steps,
-                    cfg=cfg,
-                    sampler_name=sampler_name,
-                    scheduler=scheduler,
-                    positive=positive,
-                    negative=negative,
-                    latent=latent_image,  # Pass the full latent dict
-                    denoise=denoise
-                )
-            else:
+            try:
+                import nodes
+                if hasattr(nodes, 'common_ksampler'):
+                    denoised = nodes.common_ksampler(
+                        model=wrapped_model,
+                        seed=seed,
+                        steps=steps,
+                        cfg=cfg,
+                        sampler_name=sampler_name,
+                        scheduler=scheduler,
+                        positive=positive,
+                        negative=negative,
+                        latent=latent_image,  # Pass the full latent dict
+                        denoise=denoise
+                    )
+                    # common_ksampler returns a dict, so we can return it directly
+                    return (denoised,)
+                else:
+                    raise ImportError("common_ksampler not available")
+            except Exception as e:
+                print(f"Warning: common_ksampler failed: {e}, falling back to direct sampling")
                 # Fallback to direct sampling
                 import comfy.sample
                 generator = torch.Generator(device=device).manual_seed(seed)
                 noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
                 
-                denoised = comfy.sample.sample(
+                denoised_samples = comfy.sample.sample(
                     wrapped_model,
                     noise=noise,
                     steps=steps,
@@ -370,6 +342,10 @@ class DreamFitKSamplerV3:
                     denoise=denoise,
                     seed=seed
                 )
+                # Wrap the samples in the expected format
+                out = latent_image.copy()
+                out["samples"] = denoised_samples
+                return (out,)
         else:
             # No garment features, use standard sampling
             import nodes
@@ -406,11 +382,16 @@ class DreamFitKSamplerV3:
                     seed=seed
                 )
         
-        # Return in ComfyUI format
-        out = latent_image.copy()
-        out["samples"] = denoised
-        
-        return (out,)
+        # This code should never be reached due to early returns above
+        # But if we get here somehow, handle it properly
+        if isinstance(denoised, dict) and "samples" in denoised:
+            # Already in correct format
+            return (denoised,)
+        else:
+            # Need to wrap it
+            out = latent_image.copy()
+            out["samples"] = denoised
+            return (out,)
 
 
 # Node mappings
