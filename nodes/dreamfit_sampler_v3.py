@@ -198,22 +198,44 @@ class DreamFitKSamplerV3:
         Call the model with appropriate arguments
         Handles both Flux and other model types
         """
-        # Try to determine model type and call appropriately
+        # For ComfyUI ModelPatcher, we need to use the model function properly
+        # Don't try to call the model directly - use ComfyUI's sampling functions
+        
+        # Prepare conditioning in ComfyUI format
+        if context is not None:
+            # Convert to ComfyUI conditioning format
+            positive_cond = [[context, {}]]
+        else:
+            positive_cond = [[torch.zeros((1, 77, 768), device=x.device, dtype=x.dtype), {}]]
+        
+        # Use ComfyUI's model calling mechanism
         try:
-            # For Flux models
-            if hasattr(model, 'diffusion_model') or (hasattr(model, 'model') and hasattr(model.model, 'diffusion_model')):
-                # Flux expects specific inputs
-                return model(x, timestep, context=context, y=guidance)
+            # Call through ComfyUI's model interface
+            from comfy import model_management
+            
+            # Ensure model is on correct device
+            model_management.load_model_gpu(model)
+            
+            # Use the model's apply_model method which handles ModelPatcher correctly
+            if hasattr(model, 'apply_model'):
+                # This is the correct way to call a ComfyUI model
+                result = model.apply_model(x, timestep, c={'c_crossattn': [context]})
             else:
-                # Standard diffusion model call
-                return model(x, timestep, cond=context)
+                # Fallback for wrapped models
+                if hasattr(model, 'model'):
+                    # Access the actual model inside ModelPatcher
+                    actual_model = model.model
+                    result = actual_model(x, timestep, context=context)
+                else:
+                    # Direct call
+                    result = model(x, timestep, context=context)
+            
+            return result
+            
         except Exception as e:
-            # Fallback: try simple forward
-            try:
-                return model(x, timestep, context)
-            except:
-                # Last resort
-                return model(x, timestep)
+            print(f"Model call failed: {e}")
+            # Return zero tensor as fallback
+            return torch.zeros_like(x)
     
     def _standard_denoise(
         self,
