@@ -365,15 +365,15 @@ class DreamFitSamplerV4:
     
     def _create_callback(self, model, timestep_to_start_cfg):
         """Create callback to switch between read modes during sampling"""
-        def callback(step, total_steps, x0, x, timestep):
+        def callback(step, x0, x, total_steps):
+            # ComfyUI's k-diffusion callback format: (step, denoised, x, total_steps)
             # Switch to neg_read mode after certain timestep for CFG
             if step >= timestep_to_start_cfg:
                 # Model should already be in read mode
                 # This is where we could switch between read/neg_read if needed
                 pass
-            # Parameters are required by ComfyUI callback interface but not used here
-            _ = (total_steps, x0, timestep, model)  # Mark as intentionally unused
-            return x
+            # Return the denoised output (x0) as expected by ComfyUI
+            return x0
         
         return callback
     
