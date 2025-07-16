@@ -167,19 +167,31 @@ class DreamFitSamplerV4:
         print("DreamFit Sampler V4: Executing read pass for generation...")
         self._set_processor_mode(actual_model, "read")
         
+        # Prepare noise for sampling (following ComfyUI's standard approach)
+        latent = latent_image["samples"]
+        latent = comfy.sample.fix_empty_latent_channels(model, latent)
+        
+        # Generate noise
+        batch_inds = latent_image.get("batch_index", None)
+        noise = comfy.sample.prepare_noise(latent, seed, batch_inds)
+        
+        # Get noise mask if provided
+        noise_mask = latent_image.get("noise_mask", None)
+        
         # Use ComfyUI's standard sampling with our prepared model
         samples = comfy.sample.sample(
             model,
-            noise=None,
+            noise=noise,
             steps=steps,
             cfg=cfg,
             sampler_name=sampler_name,
             scheduler=scheduler,
             positive=positive,
             negative=negative,
-            latent_image=latent_image,
+            latent_image=latent,
             denoise=denoise,
             seed=seed,
+            noise_mask=noise_mask,
             callback=self._create_callback(actual_model, timestep_to_start_cfg)
         )
         
@@ -194,18 +206,28 @@ class DreamFitSamplerV4:
         seed, steps, cfg, sampler_name, scheduler, denoise
     ):
         """Fallback to standard sampling"""
+        # Prepare latent and noise
+        latent = latent_image["samples"]
+        latent = comfy.sample.fix_empty_latent_channels(model, latent)
+        
+        # Generate noise
+        batch_inds = latent_image.get("batch_index", None)
+        noise = comfy.sample.prepare_noise(latent, seed, batch_inds)
+        noise_mask = latent_image.get("noise_mask", None)
+        
         samples = comfy.sample.sample(
             model,
-            noise=None,
+            noise=noise,
             steps=steps,
             cfg=cfg,
             sampler_name=sampler_name,
             scheduler=scheduler,
             positive=positive,
             negative=negative,
-            latent_image=latent_image,
+            latent_image=latent,
             denoise=denoise,
-            seed=seed
+            seed=seed,
+            noise_mask=noise_mask
         )
         return ({"samples": samples},)
     
