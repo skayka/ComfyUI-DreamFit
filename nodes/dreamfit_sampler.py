@@ -142,7 +142,8 @@ class DreamFitSampler:
         
         # Load LoRA checkpoint
         print(f"Loading DreamFit LoRA from: {lora_path}")
-        checkpoint = load_checkpoint(lora_path)
+        # load_checkpoint expects (local_path, repo_id, name) - we only have local path
+        checkpoint = load_checkpoint(lora_path, None, None)
         rank = get_lora_rank(checkpoint)
         print(f"LoRA rank: {rank}")
         
