@@ -293,6 +293,13 @@ class DreamFitSampler:
                     print(f"  - double_blocks count: {len(dm.double_blocks)}")
                 if hasattr(dm, 'single_blocks'):
                     print(f"  - single_blocks count: {len(dm.single_blocks)}")
+                    
+                # Check the forward method signature
+                if hasattr(dm, 'forward'):
+                    import inspect
+                    sig = inspect.signature(dm.forward)
+                    print(f"  - forward signature: {sig}")
+                    print(f"  - forward parameters: {list(sig.parameters.keys())}")
             
             # Add try-except to get more detailed error info
             try:
