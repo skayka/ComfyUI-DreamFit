@@ -414,7 +414,7 @@ class DreamFitUnified:
         dtype = comfy.model_management.unet_dtype()
         
         # Import the processor we'll use
-        from dreamfit_core.models.dreamfit_attention import DreamFitDoubleBlockProcessor
+        from ..dreamfit_core.models.dreamfit_attention import DreamFitDoubleStreamProcessor as DreamFitDoubleBlockProcessor
         
         # Process double blocks
         if hasattr(diffusion_model, 'double_blocks'):
@@ -437,6 +437,10 @@ class DreamFitUnified:
                             print(f"Warning: Failed to load checkpoint for {processor_key}: {e}")
                     
                     processor.to(device, dtype)
+                    
+                    # Store garment features in the processor
+                    processor.garment_features = garment_features
+                    processor.injection_strength = injection_strength
                     
                     # Replace the forward method or set processor
                     if hasattr(block, 'set_processor'):
