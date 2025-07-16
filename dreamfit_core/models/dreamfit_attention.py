@@ -35,6 +35,9 @@ class DreamFitDoubleStreamProcessor(nn.Module):
         self.network_alpha = network_alpha or rank
         self.lora_weight = lora_weight
         
+        # Mode for read/write mechanism
+        self.current_mode = "normal"
+        
         # LoRA layers for garment feature adaptation
         self.ref_qkv_lora_q = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
         self.ref_qkv_lora_k = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
@@ -49,7 +52,7 @@ class DreamFitDoubleStreamProcessor(nn.Module):
         self.bank_neg_img_k = None
         self.bank_neg_img_v = None
         
-    def __call__(self, attn, img, txt, vec, pe, rw_mode="normal", **kwargs):
+    def __call__(self, attn, img, txt, vec, pe, **kwargs):
         """
         Process attention with DreamFit read/write mechanism.
         
@@ -59,8 +62,10 @@ class DreamFitDoubleStreamProcessor(nn.Module):
             txt: Text features
             vec: Time/guidance embeddings
             pe: Positional encoding
-            rw_mode: "write", "neg_write", "read", "neg_read", or "normal"
         """
+        # Use current_mode instead of rw_mode parameter
+        rw_mode = getattr(self, 'current_mode', 'normal')
+        
         if rw_mode in ["write", "neg_write"]:
             return self._forward_write_mode(attn, img, txt, vec, pe, rw_mode)
         elif rw_mode in ["read", "neg_read"]:
@@ -228,6 +233,9 @@ class DreamFitSingleStreamProcessor(nn.Module):
         self.network_alpha = network_alpha or rank
         self.lora_weight = lora_weight
         
+        # Mode for read/write mechanism
+        self.current_mode = "normal"
+        
         # LoRA layers
         self.ref_qkv_lora_q = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
         self.ref_qkv_lora_k = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
@@ -242,8 +250,11 @@ class DreamFitSingleStreamProcessor(nn.Module):
         self.bank_neg_img_k = None
         self.bank_neg_img_v = None
     
-    def __call__(self, attn, x, vec, pe, rw_mode="normal", **kwargs):
+    def __call__(self, attn, x, vec, pe, **kwargs):
         """Process single-stream attention with read/write"""
+        # Use current_mode instead of rw_mode parameter
+        rw_mode = getattr(self, 'current_mode', 'normal')
+        
         if rw_mode in ["write", "neg_write"]:
             return self._forward_write_mode(attn, x, vec, pe, rw_mode)
         elif rw_mode in ["read", "neg_read"]:
