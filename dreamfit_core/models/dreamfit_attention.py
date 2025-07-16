@@ -105,10 +105,12 @@ class DreamFitDoubleStreamProcessor(nn.Module):
             self.bank_img_q = img_q
             self.bank_img_k = img_k
             self.bank_img_v = img_v
+            print(f"DreamFitProcessor: Stored features in write mode - Q shape: {img_q.shape}")
         else:  # neg_write
             self.bank_neg_img_q = img_q
             self.bank_neg_img_k = img_k
             self.bank_neg_img_v = img_v
+            print(f"DreamFitProcessor: Stored features in neg_write mode - Q shape: {img_q.shape}")
         
         # Process text
         txt_modulated = attn.txt_norm1(txt)
@@ -158,10 +160,12 @@ class DreamFitDoubleStreamProcessor(nn.Module):
             ref_q = self.bank_img_q
             ref_k = self.bank_img_k
             ref_v = self.bank_img_v
+            print(f"DreamFitProcessor: Using stored features in read mode - Q shape: {ref_q.shape if ref_q is not None else 'None'}")
         else:  # neg_read
             ref_q = self.bank_neg_img_q
             ref_k = self.bank_neg_img_k
             ref_v = self.bank_neg_img_v
+            print(f"DreamFitProcessor: Using stored features in neg_read mode - Q shape: {ref_q.shape if ref_q is not None else 'None'}")
         
         # Validate stored features
         if ref_q is None or ref_k is None or ref_v is None:

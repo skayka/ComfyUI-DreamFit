@@ -97,6 +97,7 @@ class DreamFitSamplerV4:
         if not hasattr(model, 'dreamfit_features'):
             # Fallback to standard sampling if no DreamFit features
             print("Warning: Model doesn't have DreamFit features, using standard sampling")
+            print("Please ensure DreamFitUnified node is connected before this sampler")
             return self._standard_sample(
                 model, positive, negative, latent_image,
                 seed, steps, cfg, sampler_name, scheduler, denoise
@@ -110,6 +111,14 @@ class DreamFitSamplerV4:
                 seed, steps, cfg, sampler_name, scheduler, denoise
             )
         
+        # Debug: Check what features we have
+        print(f"DreamFit features keys: {list(model.dreamfit_features.keys())}")
+        for key, value in model.dreamfit_features.items():
+            if isinstance(value, torch.Tensor):
+                print(f"  {key}: shape {value.shape}")
+            else:
+                print(f"  {key}: {type(value)}")
+        
         # Get garment features from model
         garment_features = model.dreamfit_features
         dreamfit_config = getattr(model, 'dreamfit_config', {})
@@ -122,6 +131,16 @@ class DreamFitSamplerV4:
         
         # Get actual model (handle ModelPatcher)
         actual_model = model.model if hasattr(model, 'model') else model
+        
+        # Debug: Check if we have DreamFit processors
+        processor_count = 0
+        if hasattr(actual_model, 'attn_processors'):
+            for name, processor in actual_model.attn_processors.items():
+                if hasattr(processor, 'current_mode'):
+                    processor_count += 1
+            print(f"DreamFit Sampler V4: Found {processor_count} DreamFit processors")
+        else:
+            print("Warning: Model doesn't have attn_processors attribute")
         
         # Reset all DreamFit processors
         self._reset_processors(actual_model)
@@ -253,12 +272,17 @@ class DreamFitSamplerV4:
     def _set_processor_mode(self, model, mode: str):
         """Set mode for all DreamFit processors"""
         if hasattr(model, 'attn_processors'):
-            for processor in model.attn_processors.values():
+            count = 0
+            for name, processor in model.attn_processors.items():
                 if hasattr(processor, 'current_mode'):
                     try:
                         processor.current_mode = mode
+                        count += 1
                     except Exception as e:
-                        print(f"Warning: Failed to set processor mode: {e}")
+                        print(f"Warning: Failed to set processor mode for {name}: {e}")
+            print(f"DreamFit Sampler V4: Set {count} processors to {mode} mode")
+        else:
+            print("Warning: Model doesn't have attn_processors for mode setting")
     
     def _prepare_garment_latent(self, base_latent, garment_features, device, dtype):
         """Prepare garment latent for write pass"""
@@ -304,62 +328,37 @@ class DreamFitSamplerV4:
     
     def _execute_write_pass(self, model, conditioning, latent, device, dtype):
         """Execute a single forward pass to store features"""
-        # For write pass, we need to use a custom guider that does a single forward pass
-        # Create a simple guider that just does one forward pass
-        class WritePassGuider:
-            def __init__(self, model, cond):
-                self.model = model
-                self.cond = cond
-                
-            def __call__(self, x, sigma, **kwargs):
-                # In ComfyUI, models are called through the guider interface
-                # During write pass, we just need one forward pass
-                # The sigma (timestep) for write pass should be minimal noise
-                
-                # Get the model's inner_model if it's wrapped
-                if hasattr(self.model, 'inner_model'):
-                    inner_model = self.model.inner_model
-                else:
-                    inner_model = self.model
-                    
-                # Try to find the actual model
-                if hasattr(inner_model, 'model'):
-                    actual_model = inner_model.model
-                else:
-                    actual_model = inner_model
-                    
-                # ComfyUI models expect specific format
-                # For Flux models, we need to pass through the model's diffusion_model
-                if hasattr(actual_model, 'diffusion_model'):
-                    # This is likely a wrapped Flux model
-                    # The processors should already be attached
-                    # Just do a forward pass
-                    try:
-                        # For timestep 0, we use very small sigma
-                        t = torch.zeros_like(sigma)
-                        # Call through diffusion model
-                        _ = actual_model.diffusion_model(
-                            x,
-                            timestep=t,
-                            context=self.cond[0][0] if self.cond else None,
-                            y=self.cond[0][1].get('y', None) if self.cond and len(self.cond[0]) > 1 else None
-                        )
-                    except Exception as e:
-                        print(f"Warning: Direct model call failed: {e}")
-                        # Try alternative approach
-                        pass
-                        
-                return torch.zeros_like(x)  # Return zeros for write pass
-                
-        # Create guider and execute
-        guider = WritePassGuider(model, conditioning)
+        # For write pass, we need to properly call the model with conditioning
+        # Use a very small timestep for write pass
+        timestep = torch.tensor([1.0], device=device, dtype=dtype)  # Small timestep
         
-        # Prepare sigma (timestep) - use very small value for write pass
-        sigma = torch.full((latent.shape[0],), 0.001, device=device, dtype=dtype)
-        
-        # Execute the forward pass
-        with torch.no_grad():
-            _ = guider(latent, sigma)
+        # Apply the model using ComfyUI's standard interface
+        try:
+            # ComfyUI models expect apply_model method
+            if hasattr(model, 'apply_model'):
+                # Call apply_model with proper parameters
+                with torch.no_grad():
+                    # Create model_options if needed
+                    model_options = {}
+                    if hasattr(model, 'model_options'):
+                        model_options = model.model_options.copy()
+                    
+                    # Apply model with conditioning
+                    _ = model.apply_model(
+                        latent,
+                        timestep,
+                        c_concat=None,
+                        c_crossattn=conditioning[0][0] if conditioning else None,
+                        control=None,
+                        transformer_options=model_options.get('transformer_options', {})
+                    )
+                    print("DreamFit: Write pass executed successfully")
+            else:
+                print("Warning: Model doesn't have apply_model method")
+        except Exception as e:
+            print(f"Warning: Write pass execution failed: {e}")
+            import traceback
+            traceback.print_exc()
             
         return None
     
