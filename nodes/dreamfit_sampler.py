@@ -86,7 +86,7 @@ class DreamFitSampler:
     
     def sample(self, model, vae, positive: List, negative: List, latent_image: Dict,
                garment_image: torch.Tensor, mode: str, seed: int, steps: int, 
-               cfg: float, sampler_name: str, scheduler: str, denoise: float,
+               cfg: float, sampler_name: str, scheduler: str, denoise_strength: float,
                lora_path: str = "", pose_image: Optional[torch.Tensor] = None,
                person_image: Optional[torch.Tensor] = None) -> Tuple[Dict]:
         """
@@ -105,7 +105,7 @@ class DreamFitSampler:
             cfg: Classifier-free guidance scale
             sampler_name: Name of sampler (unused, using DreamFit's sampler)
             scheduler: Name of scheduler (unused, using DreamFit's scheduler)
-            denoise: Denoising strength
+            denoise_strength: Denoising strength
             lora_path: Optional custom LoRA path
             pose_image: Optional pose image for pose_control mode
             person_image: Optional person image for virtual_tryon mode
@@ -256,6 +256,14 @@ class DreamFitSampler:
             if hasattr(actual_model, '__call__'):
                 print("Model has __call__ method")
             
+            # Debug: Check if denoise is imported correctly
+            print(f"denoise function type: {type(denoise)}")
+            print(f"denoise function callable: {callable(denoise)}")
+            print(f"denoise function location: {denoise.__module__}.{denoise.__name__}")
+            
+            # Debug: Also check the parameter that was shadowing
+            print(f"denoise_strength parameter: {denoise_strength} (type: {type(denoise_strength)})")
+            
             # Debug: Let's see what we're actually passing
             print(f"About to call denoise with:")
             print(f"  - model type: {type(actual_model)}")
@@ -273,6 +281,18 @@ class DreamFitSampler:
                 print(f"  - double_blocks: {len(actual_model.double_blocks)}")
             if hasattr(actual_model, 'single_blocks'):
                 print(f"  - single_blocks: {len(actual_model.single_blocks)}")
+                
+            # Check what the actual diffusion_model looks like
+            if hasattr(actual_model, 'diffusion_model'):
+                dm = actual_model.diffusion_model
+                print(f"\nDiffusion model details:")
+                print(f"  - Type: {type(dm)}")
+                print(f"  - Has double_blocks: {hasattr(dm, 'double_blocks')}")
+                print(f"  - Has single_blocks: {hasattr(dm, 'single_blocks')}")
+                if hasattr(dm, 'double_blocks'):
+                    print(f"  - double_blocks count: {len(dm.double_blocks)}")
+                if hasattr(dm, 'single_blocks'):
+                    print(f"  - single_blocks count: {len(dm.single_blocks)}")
             
             # Add try-except to get more detailed error info
             try:
