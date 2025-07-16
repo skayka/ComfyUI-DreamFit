@@ -49,6 +49,7 @@ class DreamFitSampler:
             "required": {
                 # Core inputs
                 "model": ("MODEL",),
+                "vae": ("VAE",),
                 "positive": ("CONDITIONING",),
                 "negative": ("CONDITIONING",),
                 "latent_image": ("LATENT",),
@@ -83,7 +84,7 @@ class DreamFitSampler:
     FUNCTION = "sample"
     CATEGORY = "dreamfit"
     
-    def sample(self, model, positive: List, negative: List, latent_image: Dict,
+    def sample(self, model, vae, positive: List, negative: List, latent_image: Dict,
                garment_image: torch.Tensor, mode: str, seed: int, steps: int, 
                cfg: float, sampler_name: str, scheduler: str, denoise: float,
                lora_path: str = "", pose_image: Optional[torch.Tensor] = None,
@@ -93,6 +94,7 @@ class DreamFitSampler:
         
         Args:
             model: ComfyUI model object
+            vae: ComfyUI VAE object for encoding images
             positive: Positive conditioning (list of tuples)
             negative: Negative conditioning (list of tuples)
             latent_image: Latent image dict with 'samples' key
@@ -180,7 +182,7 @@ class DreamFitSampler:
             batch_size = latent_samples.shape[0]
             
             # Convert garment image to latent
-            garment_latent = self._encode_image_to_latent(model, garment_image)
+            garment_latent = self._encode_image_to_latent(vae, garment_image)
             
             # Prepare negative garment (zeros)
             neg_garment_latent = torch.zeros_like(garment_latent)
@@ -335,20 +337,12 @@ class DreamFitSampler:
             if unexpected:
                 print(f"Unexpected modulation keys: {len(unexpected)}")
     
-    def _encode_image_to_latent(self, model, image):
-        """Encode image to latent using model's VAE"""
+    def _encode_image_to_latent(self, vae, image):
+        """Encode image to latent using VAE"""
         # Image is [B, H, W, C] in range [0, 1]
         # Convert to [-1, 1] and [B, C, H, W]
         x = image * 2.0 - 1.0
         x = x.permute(0, 3, 1, 2)
-        
-        # Get VAE from model
-        if hasattr(model, 'first_stage_model'):
-            vae = model.first_stage_model
-        elif hasattr(model, 'vae'):
-            vae = model.vae
-        else:
-            raise ValueError("Cannot find VAE in model")
         
         # Encode
         device = model_management.get_torch_device()
