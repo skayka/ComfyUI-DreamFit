@@ -120,10 +120,18 @@ class DreamFitSampler:
         
         # Auto-select LoRA based on mode if not provided
         if not lora_path:
+            # Try to find ComfyUI's model directory
+            try:
+                import folder_paths
+                models_dir = os.path.join(folder_paths.models_dir, "dreamfit")
+            except:
+                # Fallback to relative path
+                models_dir = os.path.join(os.path.dirname(__file__), "..", "pretrained_models")
+            
             lora_map = {
-                "garment_generation": os.path.join(os.path.dirname(__file__), "..", "pretrained_models", "flux_i2i.bin"),
-                "pose_control": os.path.join(os.path.dirname(__file__), "..", "pretrained_models", "flux_i2i_with_pose.bin"),
-                "virtual_tryon": os.path.join(os.path.dirname(__file__), "..", "pretrained_models", "flux_tryon.bin")
+                "garment_generation": os.path.join(models_dir, "flux_i2i.bin"),
+                "pose_control": os.path.join(models_dir, "flux_i2i_with_pose.bin"),
+                "virtual_tryon": os.path.join(models_dir, "flux_tryon.bin")
             }
             lora_path = lora_map[mode]
             print(f"Auto-selected LoRA for {mode}: {lora_path}")
