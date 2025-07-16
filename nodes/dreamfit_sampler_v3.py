@@ -285,6 +285,7 @@ class DreamFitKSamplerV3:
         """
         Main sampling function implementing DreamFit's approach
         """
+        import comfy.model_management
         device = comfy.model_management.get_torch_device()
         
         # Extract latent
