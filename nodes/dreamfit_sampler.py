@@ -340,29 +340,12 @@ class DreamFitSampler:
     def _encode_image_to_latent(self, vae, image):
         """Encode image to latent using VAE"""
         # Image is [B, H, W, C] in range [0, 1]
-        # Convert to [-1, 1] and [B, C, H, W]
-        x = image * 2.0 - 1.0
-        x = x.permute(0, 3, 1, 2)
+        # Ensure we only use RGB channels (first 3)
+        image_rgb = image[:, :, :, :3]
         
-        # Encode
-        device = model_management.get_torch_device()
-        x = x.to(device, dtype=torch.float32)
-        
-        if hasattr(vae, 'encode'):
-            latent = vae.encode(x)
-            if hasattr(latent, 'sample'):
-                latent = latent.sample()
-        else:
-            # Fallback for different VAE interfaces
-            latent = vae.encoder(x)
-        
-        # Scale by VAE scale factor (usually 0.13025 for SDXL/Flux)
-        if hasattr(vae, 'scale_factor'):
-            latent = latent * vae.scale_factor
-        elif hasattr(vae, 'config') and hasattr(vae.config, 'scale_factor'):
-            latent = latent * vae.config.scale_factor
-        else:
-            latent = latent * 0.13025  # Default Flux VAE scale
+        # ComfyUI's VAE.encode expects the image in [0, 1] range
+        # and handles the conversion internally
+        latent = vae.encode(image_rgb)
         
         return latent
     
