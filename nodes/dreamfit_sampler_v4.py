@@ -314,15 +314,21 @@ class DreamFitSamplerV4:
         return callback
     
     @classmethod
-    def VALIDATE_INPUTS(cls, model, **kwargs):
+    def VALIDATE_INPUTS(cls, **kwargs):
         """Validate inputs before execution"""
-        # Check if model has required methods
-        if not hasattr(model, 'apply_model'):
-            return "Model must have apply_model method for DreamFit sampling"
+        # ComfyUI may call this per-parameter or with all parameters
+        # Only validate model if it's provided
         
-        # Check if model has DreamFit features when expected
-        if hasattr(model, 'dreamfit_features') and not isinstance(model.dreamfit_features, dict):
-            return "Model's dreamfit_features must be a dictionary"
+        if "model" in kwargs:
+            model = kwargs["model"]
+            if model is not None:
+                # Check if model has required methods
+                if not hasattr(model, 'apply_model'):
+                    return "Model must have apply_model method for DreamFit sampling"
+                
+                # Check if model has DreamFit features when expected
+                if hasattr(model, 'dreamfit_features') and not isinstance(model.dreamfit_features, dict):
+                    return "Model's dreamfit_features must be a dictionary"
         
         return True
 

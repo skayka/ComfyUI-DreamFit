@@ -166,25 +166,33 @@ class DreamFitUnified:
         return (adapted_model, positive, negative, debug_garment)
     
     @classmethod
-    def VALIDATE_INPUTS(cls, model, positive, negative, garment_image, **kwargs):
+    def VALIDATE_INPUTS(cls, **kwargs):
         """Validate inputs before execution"""
-        # Check if model is valid
-        if model is None:
-            return "Model input is required"
+        # ComfyUI calls this with all inputs as kwargs
+        # Only validate if we have the actual values
         
-        # Check if conditioning is valid
-        if not isinstance(positive, list):
-            return "Positive conditioning must be a list"
+        if "model" in kwargs:
+            model = kwargs["model"]
+            if model is None:
+                return "Model input is required"
         
-        if not isinstance(negative, list):
-            return "Negative conditioning must be a list"
+        if "positive" in kwargs:
+            positive = kwargs["positive"]
+            if positive is not None and not isinstance(positive, list):
+                return "Positive conditioning must be a list"
         
-        # Check if garment image has proper shape
-        if garment_image is not None:
-            if not isinstance(garment_image, torch.Tensor):
-                return "Garment image must be a tensor"
-            if len(garment_image.shape) != 4:
-                return f"Garment image must be 4D tensor (B,H,W,C), got shape {garment_image.shape}"
+        if "negative" in kwargs:
+            negative = kwargs["negative"]
+            if negative is not None and not isinstance(negative, list):
+                return "Negative conditioning must be a list"
+        
+        if "garment_image" in kwargs:
+            garment_image = kwargs["garment_image"]
+            if garment_image is not None:
+                if not isinstance(garment_image, torch.Tensor):
+                    return "Garment image must be a tensor"
+                if len(garment_image.shape) != 4:
+                    return f"Garment image must be 4D tensor (B,H,W,C), got shape {garment_image.shape}"
         
         return True
     
