@@ -290,9 +290,25 @@ class DreamFitUnified:
         else:
             actual_model = model
         
-        # Check if model has attention processors
+        # For ComfyUI Flux models, we need to check different attributes
+        # Try to find the diffusion model
+        diffusion_model = None
+        if hasattr(actual_model, 'diffusion_model'):
+            diffusion_model = actual_model.diffusion_model
+        elif hasattr(actual_model, 'model') and hasattr(actual_model.model, 'diffusion_model'):
+            diffusion_model = actual_model.model.diffusion_model
+        
+        # Check if we found a Flux-like model with double_blocks and single_blocks
+        if diffusion_model and hasattr(diffusion_model, 'double_blocks') and hasattr(diffusion_model, 'single_blocks'):
+            print("Found Flux model structure, attaching DreamFit processors...")
+            self._attach_dreamfit_to_flux(diffusion_model, checkpoint, garment_features, 
+                                         strength, injection_strength, lora_rank, 
+                                         double_blocks_idx, single_blocks_idx)
+            return
+        
+        # Fallback to standard attn_processors approach
         if not hasattr(actual_model, 'attn_processors'):
-            print("Warning: Model doesn't have attn_processors attribute")
+            print("Warning: Model doesn't have attn_processors attribute or recognizable Flux structure")
             return
         
         # Validate garment_features
@@ -381,6 +397,69 @@ class DreamFitUnified:
             if isinstance(proc, (DreamFitDoubleStreamProcessor, DreamFitSingleStreamProcessor)):
                 proc.garment_features = garment_features
                 proc.injection_strength = injection_strength
+    
+    def _attach_dreamfit_to_flux(
+        self,
+        diffusion_model,
+        checkpoint: Dict,
+        garment_features: Dict,
+        strength: float,
+        injection_strength: float,
+        lora_rank: int,
+        double_blocks_idx: List[int],
+        single_blocks_idx: List[int]
+    ):
+        """Attach DreamFit processors directly to Flux model blocks"""
+        device = comfy.model_management.get_torch_device()
+        dtype = comfy.model_management.unet_dtype()
+        
+        # Import the processor we'll use
+        from dreamfit_core.models.dreamfit_attention import DreamFitDoubleBlockProcessor
+        
+        # Process double blocks
+        if hasattr(diffusion_model, 'double_blocks'):
+            for idx, block in enumerate(diffusion_model.double_blocks):
+                if idx in double_blocks_idx:
+                    print(f"Attaching DreamFit processor to double_block_{idx}")
+                    # Create and set processor
+                    processor = DreamFitDoubleBlockProcessor(
+                        dim=block.hidden_size if hasattr(block, 'hidden_size') else 3072,
+                        rank=lora_rank,
+                        lora_weight=strength
+                    )
+                    
+                    # Initialize from checkpoint if available
+                    processor_key = f"double_blocks.{idx}"
+                    if processor_key in checkpoint:
+                        try:
+                            processor.load_state_dict(checkpoint[processor_key])
+                        except Exception as e:
+                            print(f"Warning: Failed to load checkpoint for {processor_key}: {e}")
+                    
+                    processor.to(device, dtype)
+                    
+                    # Replace the forward method or set processor
+                    if hasattr(block, 'set_processor'):
+                        block.set_processor(processor)
+                    else:
+                        # Store original forward and replace
+                        if not hasattr(block, '_original_forward'):
+                            block._original_forward = block.forward
+                        
+                        # Create a wrapper that properly handles the processor
+                        original_block = block
+                        
+                        def forward_with_processor(img, txt, vec, pe, **kwargs):
+                            # Call processor with the block
+                            return processor(original_block, img, txt, vec, pe, **kwargs)
+                        
+                        block.forward = forward_with_processor
+                        block.processor = processor
+                        block.current_mode = "normal"  # Add mode tracking
+        
+        # Store a flag to indicate processors are attached
+        diffusion_model._dreamfit_processors_attached = True
+        print(f"DreamFit processors attached to {len(double_blocks_idx)} double blocks")
     
     def _tensor_to_comfyui_image(self, tensor: torch.Tensor) -> torch.Tensor:
         """Convert processed tensor back to ComfyUI image format"""

@@ -134,13 +134,30 @@ class DreamFitSamplerV4:
         
         # Debug: Check if we have DreamFit processors
         processor_count = 0
-        if hasattr(actual_model, 'attn_processors'):
+        diffusion_model = None
+        
+        # Try to find the diffusion model for Flux
+        if hasattr(actual_model, 'diffusion_model'):
+            diffusion_model = actual_model.diffusion_model
+        elif hasattr(actual_model, 'model') and hasattr(actual_model.model, 'diffusion_model'):
+            diffusion_model = actual_model.model.diffusion_model
+        
+        # Check for processors in different locations
+        if diffusion_model and hasattr(diffusion_model, '_dreamfit_processors_attached'):
+            print(f"DreamFit Sampler V4: Found Flux model with DreamFit processors attached")
+            # Count processors in double blocks
+            if hasattr(diffusion_model, 'double_blocks'):
+                for block in diffusion_model.double_blocks:
+                    if hasattr(block, 'processor') and hasattr(block.processor, 'current_mode'):
+                        processor_count += 1
+            print(f"DreamFit Sampler V4: Found {processor_count} DreamFit processors in Flux blocks")
+        elif hasattr(actual_model, 'attn_processors'):
             for name, processor in actual_model.attn_processors.items():
                 if hasattr(processor, 'current_mode'):
                     processor_count += 1
             print(f"DreamFit Sampler V4: Found {processor_count} DreamFit processors")
         else:
-            print("Warning: Model doesn't have attn_processors attribute")
+            print("Warning: Model doesn't have attn_processors attribute or Flux structure")
         
         # Reset all DreamFit processors
         self._reset_processors(actual_model)
@@ -261,7 +278,24 @@ class DreamFitSamplerV4:
     
     def _reset_processors(self, model):
         """Reset all DreamFit processors"""
-        if hasattr(model, 'attn_processors'):
+        # Try to find the diffusion model for Flux
+        diffusion_model = None
+        if hasattr(model, 'diffusion_model'):
+            diffusion_model = model.diffusion_model
+        elif hasattr(model, 'model') and hasattr(model.model, 'diffusion_model'):
+            diffusion_model = model.model.diffusion_model
+        
+        # Reset processors in Flux model blocks
+        if diffusion_model and hasattr(diffusion_model, 'double_blocks'):
+            for block in diffusion_model.double_blocks:
+                if hasattr(block, 'processor') and hasattr(block.processor, 'reset'):
+                    try:
+                        block.processor.reset()
+                    except Exception as e:
+                        print(f"Warning: Failed to reset Flux block processor: {e}")
+        
+        # Reset processors in standard attn_processors
+        elif hasattr(model, 'attn_processors'):
             for processor in model.attn_processors.values():
                 if hasattr(processor, 'reset'):
                     try:
@@ -271,8 +305,28 @@ class DreamFitSamplerV4:
     
     def _set_processor_mode(self, model, mode: str):
         """Set mode for all DreamFit processors"""
-        if hasattr(model, 'attn_processors'):
-            count = 0
+        count = 0
+        
+        # Try to find the diffusion model for Flux
+        diffusion_model = None
+        if hasattr(model, 'diffusion_model'):
+            diffusion_model = model.diffusion_model
+        elif hasattr(model, 'model') and hasattr(model.model, 'diffusion_model'):
+            diffusion_model = model.model.diffusion_model
+        
+        # Set mode for processors in Flux model blocks
+        if diffusion_model and hasattr(diffusion_model, 'double_blocks'):
+            for idx, block in enumerate(diffusion_model.double_blocks):
+                if hasattr(block, 'processor') and hasattr(block.processor, 'current_mode'):
+                    try:
+                        block.processor.current_mode = mode
+                        count += 1
+                    except Exception as e:
+                        print(f"Warning: Failed to set processor mode for block {idx}: {e}")
+            print(f"DreamFit Sampler V4: Set {count} Flux block processors to {mode} mode")
+        
+        # Set mode for processors in standard attn_processors
+        elif hasattr(model, 'attn_processors'):
             for name, processor in model.attn_processors.items():
                 if hasattr(processor, 'current_mode'):
                     try:
@@ -282,7 +336,7 @@ class DreamFitSamplerV4:
                         print(f"Warning: Failed to set processor mode for {name}: {e}")
             print(f"DreamFit Sampler V4: Set {count} processors to {mode} mode")
         else:
-            print("Warning: Model doesn't have attn_processors for mode setting")
+            print("Warning: Model doesn't have attn_processors or Flux structure for mode setting")
     
     def _prepare_garment_latent(self, base_latent, garment_features, device, dtype):
         """Prepare garment latent for write pass"""
