@@ -180,7 +180,6 @@ class DreamFitSamplerV4:
             latent_image=latent_image,
             denoise=denoise,
             seed=seed,
-            return_with_leftover_noise=False,
             callback=self._create_callback(actual_model, timestep_to_start_cfg)
         )
         
