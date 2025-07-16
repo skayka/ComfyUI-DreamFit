@@ -337,9 +337,14 @@ class DreamFitKSamplerV3:
             
             # Use ComfyUI's standard sampling
             import comfy.sample
+            
+            # Generate noise for sampling
+            generator = torch.Generator(device=device).manual_seed(seed)
+            noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
+            
             denoised = comfy.sample.sample(
                 wrapped_model,
-                noise=None,
+                noise=noise,
                 steps=steps,
                 cfg=cfg,
                 sampler_name=sampler_name,
@@ -353,9 +358,14 @@ class DreamFitKSamplerV3:
         else:
             # No garment features, use standard sampling
             import comfy.sample
+            
+            # Generate noise for sampling
+            generator = torch.Generator(device=device).manual_seed(seed)
+            noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
+            
             denoised = comfy.sample.sample(
                 model,
-                noise=None,
+                noise=noise,
                 steps=steps,
                 cfg=cfg,
                 sampler_name=sampler_name,
