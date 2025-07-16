@@ -371,6 +371,8 @@ class DreamFitSamplerV4:
                 # Model should already be in read mode
                 # This is where we could switch between read/neg_read if needed
                 pass
+            # Parameters are required by ComfyUI callback interface but not used here
+            _ = (total_steps, x0, timestep, model)  # Mark as intentionally unused
             return x
         
         return callback
