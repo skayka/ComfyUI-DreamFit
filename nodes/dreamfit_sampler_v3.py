@@ -296,91 +296,80 @@ class DreamFitKSamplerV3:
             garment_samples = garment_latent["samples"].to(device=device, dtype=latent.dtype)
             garment_features["garment_latent"] = garment_samples
         
-        # Use ComfyUI's standard sampling - temporarily disable wrapper to debug black images
+        # Wrap model with DreamFit wrapper if we have garment features
         if garment_features is not None:
-            print("DEBUG: Garment features detected, but using unwrapped model to debug black images")
-            # TODO: Re-enable wrapper once black image issue is resolved
-            # For now, just use the original model to see if we get normal images
+            print("DEBUG: Garment features detected, creating wrapped model")
+            wrapped_model = DreamFitModelWrapper(model, garment_features)
             
-            # Use nodes.common_ksampler for better compatibility
+            # Get timesteps for DreamFit denoising
+            timesteps = self.get_timesteps(scheduler, steps, denoise)
+            timesteps = timesteps.to(device=device, dtype=latent.dtype)
+            
+            # Use DreamFit's custom denoising
             try:
-                import nodes
-                if hasattr(nodes, 'common_ksampler'):
-                    denoised = nodes.common_ksampler(
-                        model=wrapped_model,
-                        seed=seed,
-                        steps=steps,
-                        cfg=cfg,
-                        sampler_name=sampler_name,
-                        scheduler=scheduler,
-                        positive=positive,
-                        negative=negative,
-                        latent=latent_image,  # Pass the full latent dict
-                        denoise=denoise
-                    )
-                    # common_ksampler returns a dict, so we can return it directly
-                    return (denoised,)
-                else:
-                    raise ImportError("common_ksampler not available")
-            except Exception as e:
-                print(f"Warning: common_ksampler failed: {e}, falling back to direct sampling")
-                # Fallback to direct sampling
-                import comfy.sample
-                generator = torch.Generator(device=device).manual_seed(seed)
-                noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
-                
-                denoised_samples = comfy.sample.sample(
+                denoised_samples = self.dreamfit_denoise(
                     wrapped_model,
-                    noise=noise,
-                    steps=steps,
-                    cfg=cfg,
-                    sampler_name=sampler_name,
-                    scheduler=scheduler,
-                    positive=positive,
-                    negative=negative,
-                    latent_image=latent,
-                    denoise=denoise,
-                    seed=seed
+                    latent,
+                    positive,
+                    negative,
+                    garment_features,
+                    timesteps,
+                    cfg,
+                    seed,
+                    device
                 )
+                
                 # Wrap the samples in the expected format
                 out = latent_image.copy()
                 out["samples"] = denoised_samples
                 return (out,)
+                
+            except Exception as e:
+                print(f"Warning: DreamFit denoising failed: {e}, falling back to standard sampling")
+                # Reset wrapper and fall through to standard sampling
+                if hasattr(wrapped_model, 'reset'):
+                    wrapped_model.reset()
+                
+                # Use the original model for fallback
+                model_to_use = model
         else:
             # No garment features, use standard sampling
-            import nodes
-            if hasattr(nodes, 'common_ksampler'):
-                denoised = nodes.common_ksampler(
-                    model=model,
-                    seed=seed,
-                    steps=steps,
-                    cfg=cfg,
-                    sampler_name=sampler_name,
-                    scheduler=scheduler,
-                    positive=positive,
-                    negative=negative,
-                    latent=latent_image,  # Pass the full latent dict
-                    denoise=denoise
-                )
-            else:
-                # Fallback to direct sampling  
-                import comfy.sample
-                generator = torch.Generator(device=device).manual_seed(seed)
-                noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
-                
-                denoised = comfy.sample.sample(
-                    model,
-                    noise=noise,
-                    steps=steps,
-                    cfg=cfg,
-                    sampler_name=sampler_name,
-                    scheduler=scheduler,
-                    positive=positive,
-                    negative=negative,
-                    latent_image=latent,
-                    denoise=denoise,
-                    seed=seed
-                )
+            model_to_use = model
+        
+        # Standard sampling (used for fallback or when no garment features)
+        import nodes
+        if hasattr(nodes, 'common_ksampler'):
+            denoised = nodes.common_ksampler(
+                model=model_to_use,
+                seed=seed,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                positive=positive,
+                negative=negative,
+                latent=latent_image,  # Pass the full latent dict
+                denoise=denoise
+            )
+        else:
+            # Fallback to direct sampling  
+            import comfy.sample
+            generator = torch.Generator(device=device).manual_seed(seed)
+            noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
+            
+            denoised = comfy.sample.sample(
+                model_to_use,
+                noise=noise,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                positive=positive,
+                negative=negative,
+                latent_image=latent,
+                denoise=denoise,
+                seed=seed
+            )
         
         # This code should never be reached due to early returns above
         # But if we get here somehow, handle it properly

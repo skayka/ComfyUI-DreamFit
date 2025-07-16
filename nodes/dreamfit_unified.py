@@ -1,41 +1,56 @@
 """
-DreamFit Unified Node - Complete integration for Flux diffusion models
-Handles garment feature extraction and conditioning enhancement in one node
+DreamFit Unified Node - Properly integrated with ComfyUI
+Based on official DreamFit implementation
 """
 
 import os
 import torch
 import torch.nn as nn
+from typing import Dict, Any, Optional, Tuple, List
 import copy
-from typing import Dict, Optional, Tuple, List, Any
-from pathlib import Path
+import numpy as np
+from PIL import Image
+import re
+
+# ComfyUI imports
+import comfy.model_management
+import comfy.utils
 
 # DreamFit imports
+from ..dreamfit_core.models.dreamfit_attention import DreamFitDoubleStreamProcessor, DreamFitSingleStreamProcessor
 from ..dreamfit_core.models.anything_dressing_encoder import AnythingDressingEncoder, EncoderConfig
 from ..dreamfit_core.utils.image_processing import preprocess_garment_image
-from ..dreamfit_core.models.lora_adapter import DreamFitLoRAAdapter
+from ..dreamfit_core.utils.model_loader import DreamFitModelManager
 
 
 class DreamFitUnified:
     """
-    Unified DreamFit node that properly integrates with Flux diffusion models
+    Unified DreamFit node that properly integrates with ComfyUI's model system.
     """
-    
-    # Class-level cache for encoder to avoid reloading
-    _cached_encoder = None
-    _cached_model_name = None
     
     @classmethod
     def INPUT_TYPES(cls):
         # Get available models
-        models_dir = cls._get_models_dir()
-        available_models = cls._get_available_models(models_dir)
+        try:
+            import folder_paths
+            models_dir = os.path.join(folder_paths.models_dir, "dreamfit")
+        except ImportError:
+            models_dir = os.path.join(os.path.expanduser("~"), ".cache", "dreamfit")
+        
+        available_models = []
+        for model_name in ["flux_i2i", "flux_i2i_with_pose", "flux_tryon"]:
+            model_path = os.path.join(models_dir, f"{model_name}.bin")
+            if os.path.exists(model_path):
+                available_models.append(model_name)
+        
+        if not available_models:
+            available_models = ["Please download models first"]
         
         return {
             "required": {
-                "model": ("MODEL",),  # Flux diffusion model
-                "positive": ("CONDITIONING",),  # Already encoded by CLIP
-                "negative": ("CONDITIONING",),  # Already encoded by CLIP
+                "model": ("MODEL",),
+                "positive": ("CONDITIONING",),
+                "negative": ("CONDITIONING",),
                 "garment_image": ("IMAGE",),
                 "dreamfit_model": (available_models,),
                 "strength": ("FLOAT", {
@@ -47,51 +62,37 @@ class DreamFitUnified:
                 }),
             },
             "optional": {
-                "model_image": ("IMAGE",),  # For try-on mode
+                "model_image": ("IMAGE",),
                 "injection_strength": ("FLOAT", {
-                    "default": 0.5,
+                    "default": 0.8,
                     "min": 0.0,
                     "max": 1.0,
                     "step": 0.05,
                     "display": "slider"
                 }),
-                "injection_mode": (["adaptive", "fixed", "progressive"], {
-                    "default": "adaptive"
+                "lora_rank": ("INT", {
+                    "default": 32,
+                    "min": 4,
+                    "max": 128,
+                    "step": 4
+                }),
+                "double_blocks": ("STRING", {
+                    "default": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",
+                    "multiline": False
+                }),
+                "single_blocks": ("STRING", {
+                    "default": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37",
+                    "multiline": False
                 }),
             }
         }
     
     RETURN_TYPES = ("MODEL", "CONDITIONING", "CONDITIONING", "IMAGE")
     RETURN_NAMES = ("model", "positive", "negative", "debug_garment")
-    FUNCTION = "process"
+    FUNCTION = "apply_dreamfit"
     CATEGORY = "DreamFit"
     
-    @classmethod
-    def _get_models_dir(cls):
-        """Get the DreamFit models directory"""
-        try:
-            import folder_paths
-            return os.path.join(folder_paths.models_dir, "dreamfit")
-        except ImportError:
-            return os.path.join(os.path.expanduser("~"), ".cache", "dreamfit")
-    
-    @classmethod
-    def _get_available_models(cls, models_dir):
-        """Get list of available DreamFit models"""
-        os.makedirs(models_dir, exist_ok=True)
-        
-        available_models = []
-        for model_name in ["flux_i2i", "flux_i2i_with_pose", "flux_tryon"]:
-            model_path = os.path.join(models_dir, f"{model_name}.bin")
-            if os.path.exists(model_path):
-                available_models.append(model_name)
-        
-        if not available_models:
-            return ["Please run download_models.py first"]
-        
-        return available_models
-    
-    def process(
+    def apply_dreamfit(
         self,
         model,
         positive,
@@ -100,227 +101,295 @@ class DreamFitUnified:
         dreamfit_model: str,
         strength: float = 1.0,
         model_image: Optional[torch.Tensor] = None,
-        injection_strength: float = 0.5,
-        injection_mode: str = "adaptive"
+        injection_strength: float = 0.8,
+        lora_rank: int = 32,
+        double_blocks: str = None,
+        single_blocks: str = None
     ):
         """
-        Process garment and enhance model/conditioning
+        Apply DreamFit to a Flux model by attaching custom attention processors.
         """
         # Validate model selection
-        if dreamfit_model == "Please run download_models.py first":
+        if dreamfit_model == "Please download models first":
             raise ValueError(
-                "No DreamFit models found!\n\n"
-                "Please download models first by running:\n"
-                "python download_models.py\n\n"
-                "From the ComfyUI-DreamFit directory"
+                "No DreamFit models found!\n"
+                "Please download models by running:\n"
+                "python download_models.py"
             )
         
-        # Check for try-on mode requirements
-        if dreamfit_model == "flux_tryon" and model_image is None:
-            raise ValueError(
-                "flux_tryon model requires a model_image input!\n"
-                "Please connect a reference pose/model image."
+        # Load DreamFit checkpoint
+        print(f"Loading DreamFit model: {dreamfit_model}")
+        checkpoint = self._load_dreamfit_checkpoint(dreamfit_model)
+        
+        # Initialize encoder
+        print("Initializing Anything-Dressing Encoder...")
+        encoder = self._initialize_encoder(checkpoint)
+        
+        # Process garment image
+        print("Processing garment image...")
+        processed_garment, garment_features = self._process_garment_image(
+            garment_image, encoder, model_image
+        )
+        
+        # Clone model to avoid modifying original
+        adapted_model = copy.deepcopy(model)
+        
+        # Parse block indices
+        double_blocks_idx = self._parse_block_indices(double_blocks, default_max=19)
+        single_blocks_idx = self._parse_block_indices(single_blocks, default_max=38)
+        
+        # Attach DreamFit processors
+        print("Attaching DreamFit attention processors...")
+        self._attach_dreamfit_processors(
+            adapted_model,
+            checkpoint,
+            garment_features,
+            strength,
+            injection_strength,
+            lora_rank,
+            double_blocks_idx,
+            single_blocks_idx
+        )
+        
+        # Store garment features in model for sampler access
+        adapted_model.dreamfit_features = garment_features
+        adapted_model.dreamfit_config = {
+            "model_type": dreamfit_model,
+            "strength": strength,
+            "injection_strength": injection_strength,
+            "has_model_image": model_image is not None
+        }
+        
+        # Convert processed garment back to ComfyUI format for debug output
+        debug_garment = self._tensor_to_comfyui_image(processed_garment)
+        
+        return (adapted_model, positive, negative, debug_garment)
+    
+    def _load_dreamfit_checkpoint(self, model_name: str) -> Dict:
+        """Load DreamFit checkpoint"""
+        try:
+            import folder_paths
+            models_dir = os.path.join(folder_paths.models_dir, "dreamfit")
+        except ImportError:
+            models_dir = os.path.join(os.path.expanduser("~"), ".cache", "dreamfit")
+        
+        model_path = os.path.join(models_dir, f"{model_name}.bin")
+        
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"Model {model_name} not found at {model_path}\n"
+                f"Please run: python download_models.py --model {model_name}"
             )
         
-        # Get device
-        device = model.load_device if hasattr(model, 'load_device') else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = comfy.model_management.get_torch_device()
+        checkpoint = torch.load(model_path, map_location=device)
         
-        # Load DreamFit components
-        encoder, lora_weights, config = self._load_dreamfit_model(dreamfit_model, device)
+        return checkpoint
+    
+    def _initialize_encoder(self, checkpoint: Dict) -> AnythingDressingEncoder:
+        """Initialize the Anything-Dressing Encoder"""
+        encoder_config_dict = checkpoint.get("encoder_config", {})
+        encoder_config = EncoderConfig(**encoder_config_dict) if encoder_config_dict else EncoderConfig()
         
-        # Process garment image (resize to 224x224 is required!)
+        encoder = AnythingDressingEncoder(encoder_config)
+        
+        # Load encoder weights
+        if "encoder_state_dict" in checkpoint:
+            encoder.load_state_dict(checkpoint["encoder_state_dict"])
+        
+        device = comfy.model_management.get_torch_device()
+        encoder = encoder.to(device).eval()
+        
+        return encoder
+    
+    def _process_garment_image(
+        self, 
+        garment_image: torch.Tensor, 
+        encoder: AnythingDressingEncoder,
+        model_image: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, Dict]:
+        """Process garment image and extract features"""
+        device = comfy.model_management.get_torch_device()
+        
+        # Preprocess garment image
         processed_garment = preprocess_garment_image(
             garment_image,
-            target_size=224,  # REQUIRED by Anything-Dressing Encoder
+            target_size=224,
             normalize=True,
             device=device
         )
         
-        # Extract garment features
+        # Extract features
         with torch.no_grad():
             encoder_output = encoder(processed_garment)
         
         garment_features = {
             "garment_token": encoder_output["garment_token"],
-            "pooled_features": encoder_output["pooled_features"], 
+            "pooled_features": encoder_output["pooled_features"],
             "patch_features": encoder_output["patch_features"],
             "features": encoder_output.get("features", {}),
+            "attention_weights": encoder_output.get("attention_weights", {})
         }
         
         # Process model image if provided
-        pose_features = None
         if model_image is not None:
-            processed_pose = preprocess_garment_image(
+            processed_model = preprocess_garment_image(
                 model_image,
                 target_size=224,
                 normalize=True,
                 device=device
             )
+            
             with torch.no_grad():
-                pose_output = encoder(processed_pose)
-            pose_features = {
-                "pose_token": pose_output["garment_token"],  # Reuse same encoder
-                "pose_patches": pose_output["patch_features"],
+                model_output = encoder(processed_model)
+            
+            garment_features["model_features"] = {
+                "pose_token": model_output["garment_token"],
+                "pose_patches": model_output["patch_features"]
             }
         
-        # Enhance model with LoRA if available
-        enhanced_model = self._enhance_model(model, lora_weights, strength)
-        
-        # Store DreamFit components in model for samplers
-        enhanced_model.dreamfit_components = {
-            "garment_features": garment_features,
-            "pose_features": pose_features,
-            "injection_config": {
-                "strength": injection_strength,
-                "mode": injection_mode,
-                "layers": config.get("injection_layers", [3, 6, 9, 12, 15, 18])
-            },
-            "model_type": dreamfit_model,
-            "encoder": encoder,
-        }
-        
-        # Enhance conditioning with garment features
-        enhanced_positive = self._enhance_conditioning(
-            positive,
-            garment_features,
-            pose_features,
-            injection_strength,
-            injection_mode,
-            config
-        )
-        
-        # Create debug output (denormalized for visualization)
-        debug_garment = self._create_debug_output(processed_garment)
-        
-        return (enhanced_model, enhanced_positive, negative, debug_garment)
+        return processed_garment, garment_features
     
-    def _load_dreamfit_model(self, model_name: str, device: torch.device):
-        """Load DreamFit checkpoint with caching"""
-        # Check cache
-        if self._cached_model_name == model_name and self._cached_encoder is not None:
-            encoder = self._cached_encoder
-        else:
-            # Load checkpoint
-            models_dir = self._get_models_dir()
-            model_path = os.path.join(models_dir, f"{model_name}.bin")
-            
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(
-                    f"Model file not found: {model_path}\n"
-                    f"Please run: python download_models.py --model {model_name}"
-                )
-            
-            print(f"Loading DreamFit model: {model_name}")
-            checkpoint = torch.load(model_path, map_location=device)
-            
-            # Initialize encoder
-            encoder_config_dict = checkpoint.get("encoder_config", {})
-            encoder_config = EncoderConfig(**encoder_config_dict) if encoder_config_dict else EncoderConfig()
-            
-            encoder = AnythingDressingEncoder(encoder_config)
-            if "encoder_state_dict" in checkpoint:
-                encoder.load_state_dict(checkpoint["encoder_state_dict"])
-            
-            encoder = encoder.to(device).eval()
-            
-            # Cache for next use
-            DreamFitUnified._cached_encoder = encoder
-            DreamFitUnified._cached_model_name = model_name
+    def _parse_block_indices(self, block_str: Optional[str], default_max: int) -> List[int]:
+        """Parse block indices from string"""
+        if not block_str:
+            return list(range(default_max))
         
-        # Extract other components
-        lora_weights = checkpoint.get("lora_weights", {}) or checkpoint.get("adapter_state", {}).get("lora_weights", {})
-        config = checkpoint.get("config", checkpoint.get("model_config", checkpoint.get("attention_injection", {})))
+        if block_str.strip() == "":
+            return []
         
-        return encoder, lora_weights, config
-    
-    def _enhance_model(self, model, lora_weights: Dict, strength: float):
-        """Apply LoRA enhancement to model"""
-        if not lora_weights or strength <= 0:
-            return model
-        
-        # Deep copy to avoid modifying original
-        enhanced_model = copy.deepcopy(model)
-        
-        # Apply LoRA (simplified - real implementation would be more sophisticated)
-        # This is a placeholder as full LoRA implementation requires knowing
-        # the exact model architecture
         try:
-            # Store LoRA info for potential use by samplers
-            enhanced_model.dreamfit_lora = {
-                "weights": lora_weights,
-                "strength": strength
-            }
-        except Exception as e:
-            print(f"Warning: Could not apply LoRA: {e}")
-        
-        return enhanced_model
+            indices = [int(idx.strip()) for idx in block_str.split(",")]
+            return indices
+        except ValueError:
+            print(f"Warning: Invalid block indices '{block_str}', using defaults")
+            return list(range(default_max))
     
-    def _enhance_conditioning(
+    def _attach_dreamfit_processors(
         self,
-        conditioning,
+        model,
+        checkpoint: Dict,
         garment_features: Dict,
-        pose_features: Optional[Dict],
+        strength: float,
         injection_strength: float,
-        injection_mode: str,
-        config: Dict
+        lora_rank: int,
+        double_blocks_idx: List[int],
+        single_blocks_idx: List[int]
     ):
-        """Enhance conditioning with DreamFit features"""
-        enhanced_conditioning = []
+        """Attach DreamFit attention processors to the model"""
+        # Get the actual model (handle ComfyUI ModelPatcher)
+        if hasattr(model, 'model'):
+            actual_model = model.model
+        else:
+            actual_model = model
         
-        # ComfyUI conditioning format: [(tensor, extras_dict)]
-        for item in conditioning:
-            if isinstance(item, list) and len(item) == 2:
-                cond_tensor, extras = item
+        # Check if model has attention processors
+        if not hasattr(actual_model, 'attn_processors'):
+            print("Warning: Model doesn't have attn_processors attribute")
+            return
+        
+        # Validate garment_features
+        if not isinstance(garment_features, dict):
+            raise ValueError("garment_features must be a dictionary")
+        
+        required_keys = ["garment_token", "pooled_features", "patch_features"]
+        for key in required_keys:
+            if key not in garment_features:
+                raise ValueError(f"Missing required key '{key}' in garment_features")
+        
+        dreamfit_processors = {}
+        device = comfy.model_management.get_torch_device()
+        dtype = comfy.model_management.unet_dtype()
+        
+        # Get current processors
+        current_processors = actual_model.attn_processors
+        
+        for name, processor in current_processors.items():
+            # Extract layer index from name
+            match = re.search(r'\.(\d+)\.', name)
+            if match:
+                layer_index = int(match.group(1))
             else:
-                # Handle other formats
-                cond_tensor = item
-                extras = {}
+                layer_index = -1
             
-            # Create new extras with DreamFit features
-            new_extras = extras.copy() if isinstance(extras, dict) else {}
-            
-            # Add DreamFit features
-            new_extras["dreamfit_features"] = {
-                "garment_token": garment_features["garment_token"],
-                "pooled_features": garment_features["pooled_features"],
-                "patch_features": garment_features["patch_features"],
-                "features": garment_features.get("features", {}),
-                "injection_config": {
-                    "strength": injection_strength,
-                    "mode": injection_mode,
-                    "layers": config.get("injection_layers", [3, 6, 9, 12, 15, 18])
-                }
-            }
-            
-            # Add pose features if available
-            if pose_features is not None:
-                new_extras["dreamfit_features"]["pose_features"] = pose_features
-            
-            enhanced_conditioning.append([cond_tensor, new_extras])
+            # Determine if this layer should have DreamFit processor
+            if name.startswith("double_blocks") and layer_index in double_blocks_idx:
+                print(f"Attaching DreamFit processor to {name}")
+                dreamfit_proc = DreamFitDoubleStreamProcessor(
+                    hidden_size=3072,
+                    num_heads=24,
+                    rank=lora_rank,
+                    lora_weight=strength
+                )
+                
+                # Load LoRA weights if available
+                lora_state_dict = {}
+                for k in checkpoint.keys():
+                    if name in k and "processor" in k:
+                        key = k.replace(f"{name}.processor.", "")
+                        lora_state_dict[key] = checkpoint[k]
+                
+                if lora_state_dict:
+                    try:
+                        dreamfit_proc.load_state_dict(lora_state_dict, strict=False)
+                    except Exception as e:
+                        print(f"Warning: Failed to load LoRA weights for {name}: {e}")
+                
+                dreamfit_proc = dreamfit_proc.to(device, dtype=dtype)
+                dreamfit_processors[name] = dreamfit_proc
+                
+            elif name.startswith("single_blocks") and layer_index in single_blocks_idx:
+                print(f"Attaching DreamFit processor to {name}")
+                dreamfit_proc = DreamFitSingleStreamProcessor(
+                    hidden_size=3072,
+                    num_heads=24,
+                    rank=lora_rank,
+                    lora_weight=strength
+                )
+                
+                # Load LoRA weights if available
+                lora_state_dict = {}
+                for k in checkpoint.keys():
+                    if name in k and "processor" in k:
+                        key = k.replace(f"{name}.processor.", "")
+                        lora_state_dict[key] = checkpoint[k]
+                
+                if lora_state_dict:
+                    try:
+                        dreamfit_proc.load_state_dict(lora_state_dict, strict=False)
+                    except Exception as e:
+                        print(f"Warning: Failed to load LoRA weights for {name}: {e}")
+                
+                dreamfit_proc = dreamfit_proc.to(device, dtype=dtype)
+                dreamfit_processors[name] = dreamfit_proc
+            else:
+                # Keep original processor
+                dreamfit_processors[name] = processor
         
-        return enhanced_conditioning
+        # Set the new processors
+        actual_model.set_attn_processor(dreamfit_processors)
+        
+        # Store features in processors for access during sampling
+        for proc in dreamfit_processors.values():
+            if isinstance(proc, (DreamFitDoubleStreamProcessor, DreamFitSingleStreamProcessor)):
+                proc.garment_features = garment_features
+                proc.injection_strength = injection_strength
     
-    def _create_debug_output(self, processed_garment: torch.Tensor):
-        """Create debug visualization of processed garment"""
+    def _tensor_to_comfyui_image(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Convert processed tensor back to ComfyUI image format"""
         # Denormalize
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(processed_garment.device)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(processed_garment.device)
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(tensor.device)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(tensor.device)
+        tensor = tensor * std + mean
+        tensor = tensor.clamp(0, 1)
         
-        debug_image = processed_garment * std + mean
-        debug_image = debug_image.clamp(0, 1)
+        # Convert from [B, C, H, W] to [B, H, W, C]
+        tensor = tensor.permute(0, 2, 3, 1)
         
-        # Convert to ComfyUI format [B, H, W, C]
-        debug_image = debug_image.permute(0, 2, 3, 1)
-        
-        return debug_image
-    
-    @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        # Force reload if model files change
-        return float("nan")
+        return tensor
 
 
-# Node mappings
+# Node registration
 NODE_CLASS_MAPPINGS = {
     "DreamFitUnified": DreamFitUnified,
 }

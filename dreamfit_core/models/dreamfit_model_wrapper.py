@@ -98,43 +98,89 @@ class DreamFitModelWrapper(nn.Module):
         """Wrapped forward that handles read/write logic"""
         
         if self.current_mode == "write":
-            # Store the model output for later injection
+            # In write mode, we need to store garment conditioning for later injection
+            # This should be called with garment latent + garment conditioning
             output = self.original_forward(*args, **kwargs)
-            self.garment_storage["write_output"] = output.clone() if output is not None else None
+            
+            # Store the conditioning context that was used - this contains garment features
+            if len(args) >= 3:  # x, timestep, context
+                garment_context = args[2] if len(args) > 2 else kwargs.get('context')
+                if garment_context is not None:
+                    self.garment_storage["garment_context"] = garment_context.clone()
+                    print(f"DEBUG: Write mode - stored garment context shape: {garment_context.shape}")
+            elif 'c' in kwargs and 'c_crossattn' in kwargs['c']:
+                # ComfyUI format conditioning
+                garment_context = kwargs['c']['c_crossattn'][0]
+                self.garment_storage["garment_context"] = garment_context.clone()
+                print(f"DEBUG: Write mode - stored garment context from c_crossattn: {garment_context.shape}")
+            
             self.features_written = True
             return output
             
         elif self.current_mode == "neg_write":
-            # Store negative conditioning output
+            # Store negative conditioning context
             output = self.original_forward(*args, **kwargs)
-            self.garment_storage["neg_write_output"] = output.clone() if output is not None else None
+            
+            if len(args) >= 3:
+                neg_context = args[2] if len(args) > 2 else kwargs.get('context')
+                if neg_context is not None:
+                    self.garment_storage["neg_garment_context"] = neg_context.clone()
+            elif 'c' in kwargs and 'c_crossattn' in kwargs['c']:
+                neg_context = kwargs['c']['c_crossattn'][0]
+                self.garment_storage["neg_garment_context"] = neg_context.clone()
+            
             return output
             
         elif self.current_mode == "read" and self.features_written:
-            # Get the base output
-            output = self.original_forward(*args, **kwargs)
+            # In read mode, we inject the stored garment context into the current context
+            modified_args = list(args)
+            modified_kwargs = kwargs.copy()
             
-            # Inject stored garment features
-            if "write_output" in self.garment_storage and self.garment_storage["write_output"] is not None:
-                stored_output = self.garment_storage["write_output"]
-                if output.shape == stored_output.shape:
-                    # Blend the outputs - this is where garment features get injected
-                    injection_strength = self.garment_features.get("injection_strength", 0.5)
-                    output = output + injection_strength * (stored_output - output)
+            # Inject garment features into conditioning
+            if "garment_context" in self.garment_storage:
+                garment_context = self.garment_storage["garment_context"]
+                injection_strength = self.garment_features.get("injection_strength", 0.8)
+                
+                if len(modified_args) >= 3:  # x, timestep, context
+                    current_context = modified_args[2]
+                    if current_context is not None and current_context.shape[-1] == garment_context.shape[-1]:
+                        # Blend garment features into current context
+                        enhanced_context = current_context + injection_strength * garment_context
+                        modified_args[2] = enhanced_context
+                        print(f"DEBUG: Read mode - injected garment context with strength {injection_strength}")
+                    else:
+                        print(f"DEBUG: Read mode - context shape mismatch or None context")
+                elif 'c' in modified_kwargs and 'c_crossattn' in modified_kwargs['c']:
+                    # ComfyUI format - inject into c_crossattn
+                    current_context = modified_kwargs['c']['c_crossattn'][0]
+                    if current_context.shape[-1] == garment_context.shape[-1]:
+                        enhanced_context = current_context + injection_strength * garment_context
+                        modified_kwargs['c']['c_crossattn'][0] = enhanced_context
+                        print(f"DEBUG: Read mode - injected garment context into c_crossattn")
             
-            return output
+            return self.original_forward(*modified_args, **modified_kwargs)
             
         elif self.current_mode == "neg_read" and self.features_written:
             # Similar for negative conditioning
-            output = self.original_forward(*args, **kwargs)
+            modified_args = list(args)
+            modified_kwargs = kwargs.copy()
             
-            if "neg_write_output" in self.garment_storage and self.garment_storage["neg_write_output"] is not None:
-                stored_output = self.garment_storage["neg_write_output"]
-                if output.shape == stored_output.shape:
-                    injection_strength = self.garment_features.get("injection_strength", 0.5)
-                    output = output + injection_strength * (stored_output - output)
+            if "neg_garment_context" in self.garment_storage:
+                garment_context = self.garment_storage["neg_garment_context"]
+                injection_strength = self.garment_features.get("injection_strength", 0.8)
+                
+                if len(modified_args) >= 3:
+                    current_context = modified_args[2]
+                    if current_context is not None and current_context.shape[-1] == garment_context.shape[-1]:
+                        enhanced_context = current_context + injection_strength * garment_context
+                        modified_args[2] = enhanced_context
+                elif 'c' in modified_kwargs and 'c_crossattn' in modified_kwargs['c']:
+                    current_context = modified_kwargs['c']['c_crossattn'][0]
+                    if current_context.shape[-1] == garment_context.shape[-1]:
+                        enhanced_context = current_context + injection_strength * garment_context
+                        modified_kwargs['c']['c_crossattn'][0] = enhanced_context
             
-            return output
+            return self.original_forward(*modified_args, **modified_kwargs)
         
         else:
             # Normal forward pass
