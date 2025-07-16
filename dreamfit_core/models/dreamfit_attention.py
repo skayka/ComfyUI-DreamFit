@@ -393,32 +393,33 @@ def attention(q, k, v, pe, attn_mask=None):
     Based on the official DreamFit implementation.
     """
     # Apply RoPE (Rotary Position Embedding)
-    q = apply_rope(q, pe)
-    k = apply_rope(k, pe)
+    q, k = apply_rope(q, k, pe)
     
-    # Scaled dot-product attention
-    scale = 1.0 / math.sqrt(q.shape[-1])
-    scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+    # Use PyTorch's built-in scaled dot-product attention
+    # This is more efficient and handles various optimizations
+    x = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
     
-    if attn_mask is not None:
-        scores = scores.masked_fill(~attn_mask, float('-inf'))
+    # Reshape from B H L D -> B L (H D)
+    x = rearrange(x, "B H L D -> B L (H D)")
     
-    attn_weights = F.softmax(scores, dim=-1)
-    out = torch.matmul(attn_weights, v)
-    
-    # Reshape back
-    B, H, L, D = out.shape
-    out = out.transpose(1, 2).reshape(B, L, H * D)
-    
-    return out
-
-
-def apply_rope(x, pe):
-    """Apply rotary position embedding"""
-    # Simplified RoPE - in practice would use the full implementation
-    # TODO: Implement proper RoPE based on Flux implementation
-    if pe is not None:
-        # Basic validation
-        if x.shape[-2] != pe.shape[-2]:
-            print(f"Warning: Position encoding shape mismatch: x={x.shape}, pe={pe.shape}")
     return x
+
+
+def apply_rope(xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply rotary position embedding to query and key tensors.
+    Based on the official Flux implementation.
+    """
+    if freqs_cis is None:
+        return xq, xk
+    
+    # Reshape for RoPE application
+    xq_ = xq.float().reshape(*xq.shape[:-1], -1, 1, 2)
+    xk_ = xk.float().reshape(*xk.shape[:-1], -1, 1, 2)
+    
+    # Apply rotary embedding
+    xq_out = freqs_cis[..., 0] * xq_[..., 0] + freqs_cis[..., 1] * xq_[..., 1]
+    xk_out = freqs_cis[..., 0] * xk_[..., 0] + freqs_cis[..., 1] * xk_[..., 1]
+    
+    # Reshape back and preserve dtype
+    return xq_out.reshape(*xq.shape).type_as(xq), xk_out.reshape(*xk.shape).type_as(xk)
