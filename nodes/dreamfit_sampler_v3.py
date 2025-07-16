@@ -302,18 +302,69 @@ class DreamFitKSamplerV3:
         if garment_latent is not None and garment_features is not None:
             garment_features["garment_latent"] = garment_latent["samples"]
         
-        # Perform DreamFit denoising
-        denoised = self.dreamfit_denoise(
-            model=model,
-            latent=latent,
-            positive_cond=positive,
-            negative_cond=negative,
-            garment_features=garment_features,
-            timesteps=timesteps,
-            cfg=cfg,
-            seed=seed,
-            device=device
-        )
+        # Use ComfyUI's standard sampling with our wrapped model
+        if garment_features is not None:
+            # Wrap model with DreamFit functionality
+            wrapped_model = DreamFitModelWrapper(model, garment_features)
+            
+            # Do the write phase first
+            wrapped_model.set_mode("write")
+            with torch.no_grad():
+                # Use garment latent if provided
+                if garment_features is not None and "garment_latent" in garment_features:
+                    garment_latent = garment_features["garment_latent"].to(device)
+                else:
+                    garment_latent = torch.randn_like(latent)
+                
+                # Extract conditioning
+                if isinstance(positive, list) and len(positive) > 0:
+                    pos_cond = positive[0][0] if isinstance(positive[0], list) else positive[0]
+                else:
+                    pos_cond = None
+                
+                # Call wrapped model to store features
+                try:
+                    if hasattr(wrapped_model, 'apply_model'):
+                        _ = wrapped_model.apply_model(garment_latent, torch.tensor([999.0], device=device), c={'c_crossattn': [pos_cond]})
+                    else:
+                        print("Warning: Could not perform write phase")
+                except Exception as e:
+                    print(f"Warning: Write phase failed: {e}")
+            
+            # Switch to read mode
+            wrapped_model.set_mode("read")
+            
+            # Use ComfyUI's standard sampling
+            import comfy.sample
+            denoised = comfy.sample.sample(
+                wrapped_model,
+                noise=None,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                positive=positive,
+                negative=negative,
+                latent_image=latent,
+                denoise=denoise,
+                seed=seed
+            )
+        else:
+            # No garment features, use standard sampling
+            import comfy.sample
+            denoised = comfy.sample.sample(
+                model,
+                noise=None,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                positive=positive,
+                negative=negative,
+                latent_image=latent,
+                denoise=denoise,
+                seed=seed
+            )
         
         # Return in ComfyUI format
         out = latent_image.copy()
