@@ -237,6 +237,9 @@ class DreamFitSampler:
             
             # Run DreamFit two-pass sampling
             print(f"Running DreamFit {mode} sampling for {steps} steps...")
+            print(f"Model type: {type(actual_model)}")
+            print(f"Model attributes: {dir(actual_model)[:10]}...")  # First 10 attributes
+            
             with torch.no_grad():
                 samples = denoise(
                     model=actual_model,
