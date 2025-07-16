@@ -422,8 +422,19 @@ class DreamFitUnified:
                 if idx in double_blocks_idx:
                     print(f"Attaching DreamFit processor to double_block_{idx}")
                     # Create and set processor
+                    # Get block dimensions
+                    hidden_size = 3072  # Default Flux hidden size
+                    num_heads = 24      # Default Flux num_heads
+                    
+                    # Try to get actual dimensions from block
+                    if hasattr(block, 'hidden_size'):
+                        hidden_size = block.hidden_size
+                    if hasattr(block, 'num_heads'):
+                        num_heads = block.num_heads
+                    
                     processor = DreamFitDoubleBlockProcessor(
-                        dim=block.hidden_size if hasattr(block, 'hidden_size') else 3072,
+                        hidden_size=hidden_size,
+                        num_heads=num_heads,
                         rank=lora_rank,
                         lora_weight=strength
                     )
