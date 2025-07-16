@@ -138,6 +138,15 @@ class DreamFitSamplerV4:
         garment_positive = self._create_garment_conditioning(positive, garment_features)
         garment_negative = self._create_garment_conditioning(negative, None)
         
+        # Validate conditioning dimensions for Flux
+        if positive and len(positive) > 0 and isinstance(positive[0], (list, tuple)) and len(positive[0]) > 0:
+            cond_tensor = positive[0][0]
+            if hasattr(cond_tensor, 'shape'):
+                print(f"DreamFit Sampler V4: Conditioning shape: {cond_tensor.shape}")
+                if cond_tensor.shape[-1] != 4096:
+                    print(f"WARNING: Flux expects 4096-dimensional text embeddings, but got {cond_tensor.shape[-1]}")
+                    print("Make sure you're using the correct CLIP model for Flux (CLIP-G)")
+        
         # Step 1: Write pass - Store garment features
         print("DreamFit Sampler V4: Executing write pass...")
         self._set_processor_mode(actual_model, "write")
