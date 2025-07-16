@@ -92,6 +92,9 @@ class DreamFitKSamplerV2:
         # Create timestep vector for first step
         t_vec = torch.zeros((batch_size,), dtype=latent_samples.dtype, device=device)
         
+        # Prepare conditioning with garment features FIRST
+        enhanced_positive = self._enhance_conditioning_for_sampling(positive, garment_dict)
+        
         # Phase 1: Write garment features
         wrapped_model.set_mode("write")
         with torch.no_grad():
@@ -120,9 +123,6 @@ class DreamFitKSamplerV2:
             """Ensure we stay in read mode during sampling"""
             wrapped_model.set_mode("read")
         
-        # Prepare conditioning with garment features
-        enhanced_positive = self._enhance_conditioning_for_sampling(positive, garment_dict)
-        
         # Reset the wrapper before sampling
         wrapped_model.reset()
         
@@ -149,6 +149,7 @@ class DreamFitKSamplerV2:
             if steps > 0:
                 dreamfit_callback(0, None, None, steps)
             
+            # common_ksampler returns a dict with "samples" key
             return (samples,)
         else:
             # Fallback to direct sampling

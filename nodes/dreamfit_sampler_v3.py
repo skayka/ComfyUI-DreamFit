@@ -47,21 +47,15 @@ class DreamFitKSamplerV3:
     
     def get_timesteps(self, scheduler: str, num_steps: int, denoise: float = 1.0) -> torch.Tensor:
         """Get timesteps for the given scheduler"""
-        # Get the scheduler function
-        sigmas = comfy.samplers.calculate_sigmas(
-            comfy.samplers.normal_scheduler(num_steps, 1.0),
-            model=None,
-            scheduler=scheduler,
-            steps=num_steps
-        )
+        # For Flux models, use simple linear timesteps
+        # The actual scheduler will be handled by ComfyUI's sampling logic
+        total_steps = int(num_steps / denoise) if denoise > 0 else num_steps
+        timesteps = torch.linspace(1000, 0, total_steps + 1)
         
-        # Convert sigmas to timesteps (simplified)
-        # In practice, this depends on the specific model
-        timesteps = torch.linspace(1000, 0, num_steps + 1)
-        
-        # Apply denoise factor
+        # Take the portion based on denoise
         if denoise < 1.0:
-            timesteps = timesteps[:int(num_steps * denoise) + 1]
+            start_step = int(total_steps * (1.0 - denoise))
+            timesteps = timesteps[start_step:]
             
         return timesteps
     
@@ -106,10 +100,12 @@ class DreamFitKSamplerV3:
             if i == 0 and garment_features is not None:
                 model.set_mode("write")
                 
-                # Prepare garment latent
-                # In official DreamFit, they use the encoded garment image
-                # For now, we'll use a dummy latent with same shape
-                garment_latent = torch.randn_like(img)
+                # Use garment latent if provided, otherwise use noise
+                if "garment_latent" in garment_features and garment_features["garment_latent"] is not None:
+                    garment_latent = garment_features["garment_latent"].to(device)
+                else:
+                    # Fallback to noise if no garment latent provided
+                    garment_latent = torch.randn_like(img)
                 
                 with torch.no_grad():
                     # Call model with garment features to store them
