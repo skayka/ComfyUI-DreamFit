@@ -1,538 +1,453 @@
 """
-DreamFit K-Sampler Node
-Custom sampler for garment-centric generation with Flux
+DreamFit Sampler Node for ComfyUI
+Implements garment-centric human generation using DreamFit's two-pass sampling
 """
 
+import os
+import sys
 import torch
-from typing import Dict, Any, Optional, Tuple, List
 import numpy as np
+from typing import Dict, List, Tuple, Optional, Any
+
+# Add DreamFit source to Python path
+DREAMFIT_PATH = os.path.join(os.path.dirname(__file__), "..", "DreamFit-official", "src")
+if DREAMFIT_PATH not in sys.path:
+    sys.path.insert(0, DREAMFIT_PATH)
+
+# ComfyUI imports
+import comfy.model_management
+import comfy.samplers
+import comfy.sample
+import comfy.utils
+import node_helpers
+from comfy import model_management
+
+# Import DreamFit components
+try:
+    from flux.modules.layers_dreamfit import (
+        DoubleStreamBlockLoraProcessor, 
+        SingleStreamBlockLoraProcessor
+    )
+    from flux.sampling import denoise, prepare, prepare_img, prepare_txt, get_schedule, unpack
+    from flux.util import load_checkpoint, get_lora_rank
+    print("Successfully imported DreamFit components")
+except ImportError as e:
+    print(f"Error importing DreamFit components: {e}")
+    print(f"Make sure DreamFit-official is in the correct location: {DREAMFIT_PATH}")
+    raise
 
 
-class DreamFitKSampler:
+class DreamFitSampler:
     """
-    Custom K-Sampler for DreamFit generation
+    DreamFit sampler node that implements garment-centric generation
+    Supports three modes: garment_generation, pose_control, virtual_tryon
     """
     
     @classmethod
     def INPUT_TYPES(cls):
-        try:
-            import comfy.samplers
-            samplers = comfy.samplers.KSampler.SAMPLERS
-            schedulers = comfy.samplers.KSampler.SCHEDULERS
-        except ImportError:
-            # Fallback values if running outside ComfyUI
-            samplers = ["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral",
-                       "lms", "dpm_fast", "dpm_adaptive", "dpmpp_2s_ancestral", "dpmpp_sde",
-                       "dpmpp_2m", "dpmpp_2m_sde", "ddim", "uni_pc", "uni_pc_bh2"]
-            schedulers = ["normal", "karras", "exponential", "simple", "ddim_uniform"]
-        
         return {
             "required": {
+                # Core inputs
                 "model": ("MODEL",),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
-                "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
-                "cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 100.0, "step": 0.1}),
-                "sampler_name": (samplers,),
-                "scheduler": (schedulers,),
                 "positive": ("CONDITIONING",),
                 "negative": ("CONDITIONING",),
                 "latent_image": ("LATENT",),
+                "garment_image": ("IMAGE",),
+                
+                # Mode selection
+                "mode": (["garment_generation", "pose_control", "virtual_tryon"], {
+                    "default": "garment_generation"
+                }),
+                
+                # Sampling parameters
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "steps": ("INT", {"default": 50, "min": 1, "max": 10000}),
+                "cfg": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 100.0, "step": 0.1}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
             "optional": {
-                "dreamfit_conditioning": ("DREAMFIT_CONDITIONING",),
-                "guidance_rescale": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "lora_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "dynamicPrompts": False
+                }),
+                "pose_image": ("IMAGE",),
+                "person_image": ("IMAGE",),
             }
         }
     
     RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("samples",)
     FUNCTION = "sample"
-    CATEGORY = "DreamFit"
+    CATEGORY = "dreamfit"
     
-    def sample(
-        self,
-        model,
-        seed: int,
-        steps: int,
-        cfg: float,
-        sampler_name: str,
-        scheduler: str,
-        positive,
-        negative,
-        latent_image,
-        denoise: float = 1.0,
-        dreamfit_conditioning: Optional[Dict] = None,
-        guidance_rescale: float = 0.0
-    ):
+    def sample(self, model, positive: List, negative: List, latent_image: Dict,
+               garment_image: torch.Tensor, mode: str, seed: int, steps: int, 
+               cfg: float, sampler_name: str, scheduler: str, denoise: float,
+               lora_path: str = "", pose_image: Optional[torch.Tensor] = None,
+               person_image: Optional[torch.Tensor] = None) -> Tuple[Dict]:
         """
-        Sample with DreamFit conditioning
+        Perform DreamFit two-pass sampling
         
         Args:
-            model: The adapted Flux model
+            model: ComfyUI model object
+            positive: Positive conditioning (list of tuples)
+            negative: Negative conditioning (list of tuples)
+            latent_image: Latent image dict with 'samples' key
+            garment_image: Garment image tensor [B, H, W, C]
+            mode: One of 'garment_generation', 'pose_control', 'virtual_tryon'
             seed: Random seed
             steps: Number of sampling steps
             cfg: Classifier-free guidance scale
-            sampler_name: Name of the sampler
-            scheduler: Name of the scheduler
-            positive: Positive conditioning from CLIP
-            negative: Negative conditioning from CLIP
-            latent_image: Input latent
+            sampler_name: Name of sampler (unused, using DreamFit's sampler)
+            scheduler: Name of scheduler (unused, using DreamFit's scheduler)
             denoise: Denoising strength
-            dreamfit_conditioning: Optional DreamFit conditioning
-            guidance_rescale: Guidance rescale factor
+            lora_path: Optional custom LoRA path
+            pose_image: Optional pose image for pose_control mode
+            person_image: Optional person image for virtual_tryon mode
             
         Returns:
-            Generated latent
+            Tuple containing dict with 'samples' key
         """
-        # Check if model has DreamFit components
-        has_dreamfit = hasattr(model, 'dreamfit_components') and dreamfit_conditioning is not None
         
-        if has_dreamfit:
-            # Apply DreamFit conditioning to positive conditioning
-            positive = self._apply_dreamfit_conditioning(
-                positive,
-                dreamfit_conditioning,
-                model.dreamfit_components
-            )
+        # Validate mode-specific inputs
+        if mode == "pose_control" and pose_image is None:
+            raise ValueError("pose_image is required for pose_control mode")
+        if mode == "virtual_tryon" and person_image is None:
+            raise ValueError("person_image is required for virtual_tryon mode")
         
-        # Set up the sampler
-        import comfy.model_management
-        device = comfy.model_management.get_torch_device()
-        
-        # Handle Flux-specific setup if needed
-        if hasattr(model, "model") and hasattr(model.model, "model_type"):
-            if "flux" in str(model.model.model_type).lower():
-                # Apply Flux-specific sampling configuration
-                model = self._configure_flux_sampling(model)
-        
-        # Create callback for DreamFit feature injection if applicable
-        callback = None
-        if has_dreamfit:
-            callback = self._create_injection_callback(
-                model.dreamfit_components,
-                dreamfit_conditioning
-            )
-        
-        # Perform sampling
-        import comfy.sample
-        samples = comfy.sample.sample(
-            model,
-            noise=None,
-            steps=steps,
-            cfg=cfg,
-            sampler_name=sampler_name,
-            scheduler=scheduler,
-            positive=positive,
-            negative=negative,
-            latent_image=latent_image["samples"],
-            start_step=None,
-            last_step=None,
-            force_full_denoise=denoise == 1.0,
-            denoise=denoise,
-            seed=seed,
-            callback=callback
-        )
-        
-        out = latent_image.copy()
-        out["samples"] = samples
-        
-        return (out,)
-    
-    def _apply_dreamfit_conditioning(
-        self,
-        positive,
-        dreamfit_conditioning: Dict,
-        dreamfit_components: Dict
-    ):
-        """
-        Apply DreamFit conditioning to positive conditioning
-        
-        Args:
-            positive: Original positive conditioning
-            dreamfit_conditioning: DreamFit conditioning dict
-            dreamfit_components: DreamFit model components
-            
-        Returns:
-            Modified positive conditioning
-        """
-        # Extract garment features from conditioning
-        garment_features = dreamfit_conditioning.get("garment_features", {})
-        injection_config = dreamfit_conditioning.get("injection_config", {})
-        
-        # Create a copy of positive conditioning to modify
-        modified_positive = []
-        
-        for cond, extras in positive:
-            # Create a new extras dict with DreamFit features
-            new_extras = extras.copy() if extras else {}
-            
-            # Add garment features to conditioning extras
-            new_extras["dreamfit_features"] = {
-                "garment_token": garment_features.get("garment_token"),
-                "pooled_features": garment_features.get("pooled_features"),
-                "patch_features": garment_features.get("patch_features"),
-                "injection_strength": injection_config.get("injection_strength", 0.5),
-                "injection_mode": injection_config.get("injection_mode", "adaptive"),
-                "injection_layers": injection_config.get("injection_layers", [3, 6, 9, 12, 15, 18])
+        # Auto-select LoRA based on mode if not provided
+        if not lora_path:
+            lora_map = {
+                "garment_generation": os.path.join(os.path.dirname(__file__), "..", "pretrained_models", "flux_i2i.bin"),
+                "pose_control": os.path.join(os.path.dirname(__file__), "..", "pretrained_models", "flux_i2i_with_pose.bin"),
+                "virtual_tryon": os.path.join(os.path.dirname(__file__), "..", "pretrained_models", "flux_tryon.bin")
             }
-            
-            # Add pose features if available
-            if "pose_features" in dreamfit_conditioning:
-                new_extras["dreamfit_features"]["pose_features"] = dreamfit_conditioning["pose_features"]
-            
-            # Add garment mask if available
-            if "garment_mask" in dreamfit_conditioning:
-                new_extras["dreamfit_features"]["garment_mask"] = dreamfit_conditioning["garment_mask"]
-            
-            modified_positive.append([cond, new_extras])
+            lora_path = lora_map[mode]
+            print(f"Auto-selected LoRA for {mode}: {lora_path}")
         
-        return modified_positive
-    
-    def _configure_flux_sampling(self, model):
-        """
-        Configure model for Flux-specific sampling
+        # Check if LoRA file exists
+        if not os.path.exists(lora_path):
+            raise FileNotFoundError(f"LoRA checkpoint not found: {lora_path}")
         
-        Args:
-            model: The Flux model
-            
-        Returns:
-            Configured model
-        """
+        # Load LoRA checkpoint
+        print(f"Loading DreamFit LoRA from: {lora_path}")
+        checkpoint = load_checkpoint(lora_path)
+        rank = get_lora_rank(checkpoint)
+        print(f"LoRA rank: {rank}")
+        
+        # Get the actual model (handle ModelPatcher)
+        if hasattr(model, 'model'):
+            actual_model = model.model
+        else:
+            actual_model = model
+        
+        # Store original processors
+        original_processors = getattr(actual_model, 'attn_processors', {}).copy() if hasattr(actual_model, 'attn_processors') else {}
+        
         try:
-            # Apply Flux-specific sampling configuration
-            from comfy_extras.nodes_model_advanced import ModelSamplingFlux
-            flux_sampler = ModelSamplingFlux()
+            # Apply DreamFit processors
+            print("Applying DreamFit processors...")
+            lora_processors = self._create_and_load_processors(actual_model, checkpoint, rank)
+            if hasattr(actual_model, 'set_attn_processor'):
+                actual_model.set_attn_processor(lora_processors)
+            else:
+                print("Warning: Model doesn't support set_attn_processor")
             
-            # Get Flux sampling parameters
-            # These would typically come from the model config
-            width = 1024
-            height = 1024
+            # Load modulation LoRA weights
+            self._load_modulation_lora(actual_model, checkpoint)
             
-            # Apply sampling configuration
-            patched = flux_sampler.patch(
-                model,
-                width=width,
-                height=height,
-                # Add other Flux-specific parameters as needed
+            # Get device and dtype
+            device = model_management.get_torch_device()
+            dtype = model_management.unet_dtype()
+            
+            # Prepare inputs for DreamFit
+            print("Preparing inputs...")
+            
+            # Get latent samples
+            latent_samples = latent_image["samples"]
+            batch_size = latent_samples.shape[0]
+            
+            # Convert garment image to latent
+            garment_latent = self._encode_image_to_latent(model, garment_image)
+            
+            # Prepare negative garment (zeros)
+            neg_garment_latent = torch.zeros_like(garment_latent)
+            
+            # Get text encoders from model
+            clip_encoder, t5_encoder = self._get_text_encoders(model)
+            
+            # Prepare conditioning in DreamFit format
+            print("Preparing DreamFit conditioning...")
+            
+            if clip_encoder is not None and t5_encoder is not None:
+                # Use DreamFit's text encoders
+                positive_prompt = self._extract_prompt_from_conditioning(positive)
+                negative_prompt = self._extract_prompt_from_conditioning(negative)
+                
+                inp_person = prepare(t5_encoder, clip_encoder, latent_samples, positive_prompt)
+                inp_cloth = prepare(t5_encoder, clip_encoder, garment_latent, ["cloth"] * batch_size)
+                neg_inp_cond = prepare(t5_encoder, clip_encoder, neg_garment_latent, negative_prompt)
+            else:
+                # Fallback: Use ComfyUI's pre-encoded conditioning
+                print("Using ComfyUI conditioning (text encoders not available)")
+                inp_person = self._prepare_conditioning_from_comfy(positive, latent_samples, device, dtype)
+                
+                # For garment, we still need to create conditioning
+                # Use empty text conditioning for "cloth"
+                inp_cloth = self._prepare_conditioning_from_comfy(positive, garment_latent, device, dtype)
+                # Override text with minimal embedding for "cloth"
+                inp_cloth["txt"] = torch.zeros_like(inp_cloth["txt"][:, :1, :])  # Single token
+                inp_cloth["txt_ids"] = torch.zeros_like(inp_cloth["txt_ids"][:, :1, :])
+                
+                # Negative conditioning
+                neg_inp_cond = self._prepare_conditioning_from_comfy(negative, neg_garment_latent, device, dtype)
+            
+            # Move to correct device
+            for key in inp_person:
+                inp_person[key] = inp_person[key].to(device, dtype=dtype)
+            for key in inp_cloth:
+                inp_cloth[key] = inp_cloth[key].to(device, dtype=dtype)
+            for key in neg_inp_cond:
+                neg_inp_cond[key] = neg_inp_cond[key].to(device, dtype=dtype)
+            
+            # Get timesteps
+            height, width = latent_samples.shape[2] * 8, latent_samples.shape[3] * 8
+            timesteps = get_schedule(
+                num_steps=steps,
+                image_seq_len=(width // 8) * (height // 8) // 4,
+                shift=True
             )
-            # Handle both tuple and direct return
-            model = patched[0] if isinstance(patched, (list, tuple)) else patched
+            
+            # Set seed
+            torch.manual_seed(seed)
+            
+            # Run DreamFit two-pass sampling
+            print(f"Running DreamFit {mode} sampling for {steps} steps...")
+            with torch.no_grad():
+                samples = denoise(
+                    model=actual_model,
+                    inp_person=inp_person,
+                    inp_cloth=inp_cloth,
+                    neg_inp_cond=neg_inp_cond,
+                    timesteps=timesteps,
+                    guidance=cfg,
+                    true_gs=3.5,  # From DreamFit config
+                    timestep_to_start_cfg=51,  # From DreamFit config
+                    num_steps=steps
+                )
+            
+            print("Sampling complete!")
+            
+            # Return in ComfyUI format
+            return ({"samples": samples},)
+            
+        finally:
+            # Always restore original processors
+            print("Restoring original model processors...")
+            if hasattr(actual_model, 'set_attn_processor') and original_processors:
+                actual_model.set_attn_processor(original_processors)
+    
+    def _create_and_load_processors(self, model, checkpoint, rank):
+        """Create DreamFit processors and load their weights"""
+        processors = {}
+        device = next(model.parameters()).device if hasattr(model, 'parameters') else torch.device('cpu')
+        
+        # Process all double blocks (0-18)
+        for i in range(19):
+            name = f"double_blocks.{i}"
+            processor = DoubleStreamBlockLoraProcessor(
+                dim=3072,
+                rank=rank,
+                network_alpha=16,
+                lora_weight=1.0
+            )
+            
+            # Load weights for this processor
+            processor_state_dict = {}
+            for key in checkpoint:
+                if name in key and "processor" in key:
+                    # Extract the part after processor
+                    new_key = key.split(f"{name}.processor.")[-1]
+                    processor_state_dict[new_key] = checkpoint[key]
+            
+            if processor_state_dict:
+                processor.load_state_dict(processor_state_dict, strict=False)
+                processor.to(device, dtype=torch.bfloat16)
+            
+            processors[f"{name}.processor"] = processor
+        
+        # Process all single blocks (0-37)
+        for i in range(38):
+            name = f"single_blocks.{i}"
+            processor = SingleStreamBlockLoraProcessor(
+                dim=3072,
+                rank=rank,
+                network_alpha=16,
+                lora_weight=1.0
+            )
+            
+            # Load weights
+            processor_state_dict = {}
+            for key in checkpoint:
+                if name in key and "processor" in key:
+                    new_key = key.split(f"{name}.processor.")[-1]
+                    processor_state_dict[new_key] = checkpoint[key]
+            
+            if processor_state_dict:
+                processor.load_state_dict(processor_state_dict, strict=False)
+                processor.to(device, dtype=torch.bfloat16)
+            
+            processors[f"{name}.processor"] = processor
+        
+        # Keep other processors unchanged
+        if hasattr(model, 'attn_processors'):
+            for name, proc in model.attn_processors.items():
+                if name not in processors:
+                    processors[name] = proc
+        
+        return processors
+    
+    def _load_modulation_lora(self, model, checkpoint):
+        """Load LoRA weights for modulation layers"""
+        # Extract modulation LoRA weights
+        modulation_state_dict = {}
+        for name, param in checkpoint.items():
+            if 'lin_lora' in name:
+                modulation_state_dict[name] = param
+        
+        if modulation_state_dict:
+            # Load into model
+            missing, unexpected = model.load_state_dict(modulation_state_dict, strict=False)
+            if missing:
+                print(f"Missing modulation keys: {len(missing)}")
+            if unexpected:
+                print(f"Unexpected modulation keys: {len(unexpected)}")
+    
+    def _encode_image_to_latent(self, model, image):
+        """Encode image to latent using model's VAE"""
+        # Image is [B, H, W, C] in range [0, 1]
+        # Convert to [-1, 1] and [B, C, H, W]
+        x = image * 2.0 - 1.0
+        x = x.permute(0, 3, 1, 2)
+        
+        # Get VAE from model
+        if hasattr(model, 'first_stage_model'):
+            vae = model.first_stage_model
+        elif hasattr(model, 'vae'):
+            vae = model.vae
+        else:
+            raise ValueError("Cannot find VAE in model")
+        
+        # Encode
+        device = model_management.get_torch_device()
+        x = x.to(device, dtype=torch.float32)
+        
+        if hasattr(vae, 'encode'):
+            latent = vae.encode(x)
+            if hasattr(latent, 'sample'):
+                latent = latent.sample()
+        else:
+            # Fallback for different VAE interfaces
+            latent = vae.encoder(x)
+        
+        # Scale by VAE scale factor (usually 0.13025 for SDXL/Flux)
+        if hasattr(vae, 'scale_factor'):
+            latent = latent * vae.scale_factor
+        elif hasattr(vae, 'config') and hasattr(vae.config, 'scale_factor'):
+            latent = latent * vae.config.scale_factor
+        else:
+            latent = latent * 0.13025  # Default Flux VAE scale
+        
+        return latent
+    
+    def _get_text_encoders(self, model):
+        """Extract CLIP and T5 encoders from model"""
+        # In ComfyUI, the text encoders are typically loaded separately
+        # For DreamFit, we need to load them from the official implementation
+        
+        try:
+            from flux.util import load_clip, load_t5
+            device = model_management.get_torch_device()
+            
+            print("Loading text encoders...")
+            clip_encoder = load_clip(device)
+            t5_encoder = load_t5(device, max_length=512)
+            
+            return clip_encoder, t5_encoder
             
         except Exception as e:
-            print(f"Warning: Failed to apply Flux sampling configuration: {e}")
-        
-        return model
+            print(f"Error loading text encoders: {e}")
+            # Fallback: Create wrapper that uses ComfyUI's conditioning directly
+            return None, None
     
-    def _create_injection_callback(
-        self,
-        dreamfit_components: Dict,
-        dreamfit_conditioning: Dict
-    ):
-        """
-        Create callback for feature injection during sampling
+    def _extract_prompt_from_conditioning(self, conditioning):
+        """Extract text prompt from ComfyUI conditioning format"""
+        # In ComfyUI, we typically don't have access to the original prompt
+        # The conditioning already contains the encoded text
+        # For DreamFit, we need the raw text to re-encode with DreamFit's encoders
         
-        Args:
-            dreamfit_components: DreamFit model components
-            dreamfit_conditioning: DreamFit conditioning
-            
-        Returns:
-            Callback function
-        """
-        injector = dreamfit_components.get("attention_injector")
-        garment_features = dreamfit_conditioning["garment_features"]
+        # This is a limitation - we'll need to either:
+        # 1. Add prompt as explicit input to the node
+        # 2. Use the pre-encoded conditioning directly
         
-        def injection_callback(step, x0, x, total_steps):
-            """
-            Callback to handle feature injection during sampling
-            
-            Args:
-                step: Current step
-                x0: Predicted clean image
-                x: Current noisy image
-                total_steps: Total number of steps
-            """
-            # This is a placeholder for the actual injection logic
-            # In practice, this would coordinate with the hooks set up
-            # in the adapter to inject features at the right time
-            
-            # Update injection strength based on step if progressive mode
-            if dreamfit_conditioning["injection_config"]["injection_mode"] == "progressive":
-                progress = step / total_steps
-                # Reduce injection strength over time
-                current_strength = dreamfit_conditioning["injection_config"]["injection_strength"] * (1 - progress)
-                
-                # Update injector configuration
-                if injector:
-                    injector.config.injection_strength = current_strength
-        
-        return injection_callback
-
-
-class DreamFitSamplerAdvanced:
-    """
-    Advanced sampler with more control options
-    """
+        # For now, return empty prompts and rely on the conditioning tensors
+        if isinstance(conditioning, list) and len(conditioning) > 0:
+            batch_size = conditioning[0][0].shape[0]
+            return [""] * batch_size
+        return [""]
     
-    @classmethod
-    def INPUT_TYPES(cls):
-        try:
-            import comfy.samplers
-            samplers = comfy.samplers.KSampler.SAMPLERS
-            schedulers = comfy.samplers.KSampler.SCHEDULERS
-        except ImportError:
-            # Fallback values if running outside ComfyUI
-            samplers = ["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral",
-                       "lms", "dpm_fast", "dpm_adaptive", "dpmpp_2s_ancestral", "dpmpp_sde",
-                       "dpmpp_2m", "dpmpp_2m_sde", "ddim", "uni_pc", "uni_pc_bh2"]
-            schedulers = ["normal", "karras", "exponential", "simple", "ddim_uniform"]
+    def _prepare_conditioning_from_comfy(self, conditioning, latent, device, dtype):
+        """Convert ComfyUI conditioning to DreamFit format"""
+        # ComfyUI conditioning is [(tensor, dict), ...]
+        # DreamFit expects dict with 'txt', 'txt_ids', 'vec', 'img', 'img_ids'
+        
+        if not conditioning or len(conditioning) == 0:
+            raise ValueError("Empty conditioning")
+        
+        cond_tensor, cond_dict = conditioning[0]
+        batch_size = latent.shape[0]
+        
+        # Prepare image embeddings from latent
+        # DreamFit expects packed format: rearrange "b c (h ph) (w pw) -> b (h w) (c ph pw)"
+        c, h, w = latent.shape[1], latent.shape[2], latent.shape[3]
+        # Pack with patch size 2
+        img = latent.view(batch_size, c, h // 2, 2, w // 2, 2)
+        img = img.permute(0, 2, 4, 1, 3, 5)
+        img = img.reshape(batch_size, (h // 2) * (w // 2), c * 4)
+        
+        # Create image position embeddings for packed dimensions
+        h_packed, w_packed = h // 2, w // 2
+        img_ids = torch.zeros(h_packed, w_packed, 3, device=device, dtype=dtype)
+        img_ids[..., 1] = torch.arange(h_packed, device=device)[:, None]
+        img_ids[..., 2] = torch.arange(w_packed, device=device)[None, :]
+        img_ids = img_ids.reshape(1, -1, 3).repeat(batch_size, 1, 1)
+        
+        # For text, we'll use the conditioning tensor
+        # Flux expects separate CLIP and T5 embeddings
+        # We'll approximate by using the conditioning as T5 output
+        txt = cond_tensor  # This is the text conditioning from ComfyUI
+        txt_ids = torch.zeros(batch_size, txt.shape[1], 3, device=device, dtype=dtype)
+        
+        # CLIP pooled output (simplified)
+        vec = torch.mean(txt, dim=1)  # Pool over sequence dimension
         
         return {
-            "required": {
-                "model": ("MODEL",),
-                "add_noise": ("BOOLEAN", {"default": True}),
-                "noise_seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
-                "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
-                "cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 100.0, "step": 0.1}),
-                "sampler_name": (samplers,),
-                "scheduler": (schedulers,),
-                "positive": ("CONDITIONING",),
-                "negative": ("CONDITIONING",),
-                "latent_image": ("LATENT",),
-                "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
-                "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
-                "return_with_leftover_noise": ("BOOLEAN", {"default": False}),
-            },
-            "optional": {
-                "dreamfit_conditioning": ("DREAMFIT_CONDITIONING",),
-                "noise_mode": (["default", "garment_aware", "structured"], {"default": "default"}),
-                "injection_schedule": (["constant", "linear", "cosine", "step"], {"default": "constant"}),
-            }
+            "img": img.to(device, dtype=dtype),
+            "img_ids": img_ids,
+            "txt": txt.to(device, dtype=dtype),
+            "txt_ids": txt_ids,
+            "vec": vec.to(device, dtype=dtype),
         }
-    
-    RETURN_TYPES = ("LATENT",)
-    FUNCTION = "sample"
-    CATEGORY = "DreamFit"
-    
-    def sample(
-        self,
-        model,
-        add_noise: bool,
-        noise_seed: int,
-        steps: int,
-        cfg: float,
-        sampler_name: str,
-        scheduler: str,
-        positive,
-        negative,
-        latent_image,
-        start_at_step: int,
-        end_at_step: int,
-        return_with_leftover_noise: bool,
-        dreamfit_conditioning: Optional[Dict] = None,
-        noise_mode: str = "default",
-        injection_schedule: str = "constant"
-    ):
-        """
-        Advanced sampling with more control
-        """
-        # Check if model has DreamFit components
-        has_dreamfit = hasattr(model, 'dreamfit_components') and dreamfit_conditioning is not None
-        
-        if has_dreamfit:
-            # Apply DreamFit conditioning
-            positive = self._apply_dreamfit_conditioning_advanced(
-                positive,
-                dreamfit_conditioning,
-                model.dreamfit_components,
-                injection_schedule
-            )
-        
-        # Generate noise based on mode
-        if add_noise:
-            noise = self._generate_noise(
-                latent_image["samples"],
-                noise_seed,
-                noise_mode,
-                dreamfit_conditioning
-            )
-        else:
-            noise = None
-        
-        # Adjust steps
-        actual_end_step = min(end_at_step, steps)
-        
-        # Sample
-        import comfy.sample
-        samples = comfy.sample.sample_custom(
-            model,
-            noise=noise,
-            cfg=cfg,
-            sampler_name=sampler_name,
-            scheduler=scheduler,
-            positive=positive,
-            negative=negative,
-            latent_image=latent_image["samples"],
-            noise_seed=noise_seed,
-            start_step=start_at_step,
-            last_step=actual_end_step,
-            force_full_denoise=not return_with_leftover_noise and actual_end_step >= steps,
-            denoise=1.0,
-            disable_pbar=False
-        )
-        
-        out = latent_image.copy()
-        out["samples"] = samples
-        
-        return (out,)
-    
-    def _apply_dreamfit_conditioning_advanced(
-        self,
-        positive,
-        dreamfit_conditioning: Dict,
-        dreamfit_components: Dict,
-        injection_schedule: str
-    ):
-        """Apply advanced DreamFit conditioning with injection schedules"""
-        # Extract features
-        garment_features = dreamfit_conditioning.get("garment_features", {})
-        injection_config = dreamfit_conditioning.get("injection_config", {})
-        
-        # Create modified conditioning
-        modified_positive = []
-        
-        for cond, extras in positive:
-            new_extras = extras.copy() if extras else {}
-            
-            # Create schedule configuration
-            schedule_config = {
-                "type": injection_schedule,
-                "params": {}
-            }
-            
-            if injection_schedule == "linear":
-                # Linear decay from full strength to 0
-                schedule_config["params"] = {
-                    "start_strength": injection_config.get("injection_strength", 0.5),
-                    "end_strength": 0.0
-                }
-            elif injection_schedule == "cosine":
-                # Cosine decay
-                schedule_config["params"] = {
-                    "strength": injection_config.get("injection_strength", 0.5),
-                    "period": 1.0  # Full period over sampling steps
-                }
-            elif injection_schedule == "step":
-                # Step function - full strength for first half, then reduced
-                schedule_config["params"] = {
-                    "initial_strength": injection_config.get("injection_strength", 0.5),
-                    "step_point": 0.5,  # Switch at 50% of steps
-                    "final_strength": injection_config.get("injection_strength", 0.5) * 0.3
-                }
-            else:  # constant
-                schedule_config["params"] = {
-                    "strength": injection_config.get("injection_strength", 0.5)
-                }
-            
-            # Build DreamFit features with schedule
-            new_extras["dreamfit_features"] = {
-                "garment_token": garment_features.get("garment_token"),
-                "pooled_features": garment_features.get("pooled_features"),
-                "patch_features": garment_features.get("patch_features"),
-                "features": garment_features.get("features"),
-                "injection_mode": injection_config.get("injection_mode", "adaptive"),
-                "injection_layers": injection_config.get("injection_layers", [3, 6, 9, 12, 15, 18]),
-                "injection_schedule": schedule_config
-            }
-            
-            # Add optional features
-            if "pose_features" in dreamfit_conditioning:
-                new_extras["dreamfit_features"]["pose_features"] = dreamfit_conditioning["pose_features"]
-            
-            if "garment_mask" in dreamfit_conditioning:
-                new_extras["dreamfit_features"]["garment_mask"] = dreamfit_conditioning["garment_mask"]
-            
-            modified_positive.append([cond, new_extras])
-        
-        return modified_positive
-    
-    def _generate_noise(
-        self,
-        latent: torch.Tensor,
-        seed: int,
-        mode: str,
-        dreamfit_conditioning: Optional[Dict]
-    ) -> torch.Tensor:
-        """Generate noise based on mode"""
-        batch_size, channels, height, width = latent.shape
-        device = latent.device
-        
-        # Set random seed
-        generator = torch.Generator(device=device).manual_seed(seed)
-        
-        if mode == "default":
-            # Standard Gaussian noise
-            noise = torch.randn(
-                batch_size, channels, height, width,
-                generator=generator,
-                device=device
-            )
-            
-        elif mode == "garment_aware" and dreamfit_conditioning:
-            # Generate noise that's aware of garment regions
-            noise = torch.randn(
-                batch_size, channels, height, width,
-                generator=generator,
-                device=device
-            )
-            
-            # Reduce noise in garment regions if mask is available
-            if "garment_mask" in dreamfit_conditioning:
-                mask = dreamfit_conditioning["garment_mask"]
-                # Resize mask to match latent size
-                mask = torch.nn.functional.interpolate(
-                    mask,
-                    size=(height, width),
-                    mode='bilinear',
-                    align_corners=False
-                )
-                # Reduce noise strength in garment areas
-                noise = noise * (1 - 0.3 * mask)
-                
-        elif mode == "structured":
-            # Generate structured noise with patterns
-            noise = torch.randn(
-                batch_size, channels, height, width,
-                generator=generator,
-                device=device
-            )
-            
-            # Add some structure
-            freq = 8
-            x = torch.linspace(0, freq * np.pi, width, device=device)
-            y = torch.linspace(0, freq * np.pi, height, device=device)
-            xx, yy = torch.meshgrid(x, y, indexing='xy')
-            
-            pattern = torch.sin(xx) * torch.cos(yy) * 0.1
-            noise = noise + pattern.unsqueeze(0).unsqueeze(0)
-            
-        else:
-            # Fallback to default
-            noise = torch.randn(
-                batch_size, channels, height, width,
-                generator=generator,
-                device=device
-            )
-        
-        return noise
 
 
-# Node mappings
+# Node registration
 NODE_CLASS_MAPPINGS = {
-    "DreamFitKSampler": DreamFitKSampler,
-    "DreamFitSamplerAdvanced": DreamFitSamplerAdvanced,
+    "DreamFitSampler": DreamFitSampler
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "DreamFitKSampler": "DreamFit K-Sampler",
-    "DreamFitSamplerAdvanced": "DreamFit Sampler Advanced",
+    "DreamFitSampler": "DreamFit Sampler"
 }

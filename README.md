@@ -195,7 +195,29 @@ All-in-one node for easy DreamFit generation.
 **Outputs:**
 - `samples`: Generated latent image
 
-### 6. DreamFit Sampler Advanced
+### 7. DreamFit Sampler (NEW)
+Single node implementation that directly uses the official DreamFit code for maximum compatibility.
+
+**Inputs:**
+- `model`: Flux model (from CheckpointLoaderSimple)
+- `positive/negative`: Conditioning from CLIPTextEncode
+- `latent_image`: Starting latent (from EmptyLatentImage)
+- `garment_image`: The garment to generate
+- `mode`: Generation mode (garment_generation/pose_control/virtual_tryon)
+- `seed`, `steps`, `cfg`: Standard sampling parameters
+- `sampler_name`, `scheduler`: Sampling algorithm options
+- `lora_path` (optional): Custom path to LoRA checkpoint
+
+**Outputs:**
+- `samples`: Generated latent (connect to VAEDecode)
+
+**Features:**
+- Direct integration with official DreamFit implementation
+- Automatic LoRA selection based on mode
+- Two-pass sampling with garment feature injection
+- Full compatibility with original DreamFit behavior
+
+### 8. DreamFit Sampler Advanced
 Advanced sampler with additional controls.
 
 **Features:**
