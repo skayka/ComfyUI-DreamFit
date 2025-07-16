@@ -165,6 +165,29 @@ class DreamFitUnified:
         
         return (adapted_model, positive, negative, debug_garment)
     
+    @classmethod
+    def VALIDATE_INPUTS(cls, model, positive, negative, garment_image, **kwargs):
+        """Validate inputs before execution"""
+        # Check if model is valid
+        if model is None:
+            return "Model input is required"
+        
+        # Check if conditioning is valid
+        if not isinstance(positive, list):
+            return "Positive conditioning must be a list"
+        
+        if not isinstance(negative, list):
+            return "Negative conditioning must be a list"
+        
+        # Check if garment image has proper shape
+        if garment_image is not None:
+            if not isinstance(garment_image, torch.Tensor):
+                return "Garment image must be a tensor"
+            if len(garment_image.shape) != 4:
+                return f"Garment image must be 4D tensor (B,H,W,C), got shape {garment_image.shape}"
+        
+        return True
+    
     def _load_dreamfit_checkpoint(self, model_name: str) -> Dict:
         """Load DreamFit checkpoint"""
         try:

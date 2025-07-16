@@ -9,6 +9,15 @@ import torch.nn.functional as F
 from typing import Dict, Optional, Any, Tuple
 from einops import rearrange
 import math
+try:
+    import comfy.model_management
+except ImportError:
+    # Fallback for testing without ComfyUI
+    class MockModelManagement:
+        @staticmethod
+        def intermediate_device():
+            return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    comfy = type('comfy', (), {'model_management': MockModelManagement})()
 
 
 class DreamFitDoubleStreamProcessor(nn.Module):
@@ -154,10 +163,14 @@ class DreamFitDoubleStreamProcessor(nn.Module):
             print(f"Warning: No stored features for {rw_mode} mode, falling back to normal mode")
             return self._forward_normal_mode(attn, img, txt, vec, pe)
         
+        # Ensure same device and dtype
+        device = img_q.device
+        dtype = img_q.dtype
+        
         # Concatenate with stored features
-        q = torch.cat((txt_q, img_q, ref_q), dim=2)
-        k = torch.cat((txt_k, img_k, ref_k), dim=2)
-        v = torch.cat((txt_v, img_v, ref_v), dim=2)
+        q = torch.cat((txt_q, img_q, ref_q.to(device, dtype)), dim=2)
+        k = torch.cat((txt_k, img_k, ref_k.to(device, dtype)), dim=2)
+        v = torch.cat((txt_v, img_v, ref_v.to(device, dtype)), dim=2)
         
         # Create attention mask to prevent text from attending to reference
         B, H, L_txt, D = txt_q.shape
@@ -302,10 +315,14 @@ class DreamFitSingleStreamProcessor(nn.Module):
             print(f"Warning: No stored features for {rw_mode} mode in single-stream, falling back to normal mode")
             return self._forward_normal_mode(attn, x, vec, pe)
         
-        # Concatenate
-        q = torch.cat((q, ref_q), dim=2)
-        k = torch.cat((k, ref_k), dim=2)
-        v = torch.cat((v, ref_v), dim=2)
+        # Ensure same device and dtype
+        device = q.device
+        dtype = q.dtype
+        
+        # Concatenate stored features
+        q = torch.cat((q, ref_q.to(device, dtype)), dim=2)
+        k = torch.cat((k, ref_k.to(device, dtype)), dim=2)
+        v = torch.cat((v, ref_v.to(device, dtype)), dim=2)
         
         # Attention
         attn_cat = attention(q, k, v, pe=pe)

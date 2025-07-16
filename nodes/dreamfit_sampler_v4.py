@@ -12,6 +12,7 @@ import numpy as np
 import comfy.sample
 import comfy.samplers
 import comfy.model_management
+import node_helpers
 
 
 class DreamFitSamplerV4:
@@ -115,8 +116,8 @@ class DreamFitSamplerV4:
         
         print("DreamFit Sampler V4: Starting read/write sampling process")
         
-        # Set up device and dtype
-        device = comfy.model_management.get_torch_device()
+        # Set up device and dtype using ComfyUI's management
+        device = comfy.model_management.intermediate_device()
         dtype = comfy.model_management.unet_dtype()
         
         # Get actual model (handle ModelPatcher)
@@ -234,8 +235,15 @@ class DreamFitSamplerV4:
         # Create latent of same shape as generation
         B, C, H, W = base_latent.shape
         
+        # Use ComfyUI's device management
+        device = device or comfy.model_management.intermediate_device()
+        
         # Option 1: Use zeros (clean latent)
-        garment_latent = torch.zeros_like(base_latent)
+        garment_latent = torch.zeros(
+            (B, C, H, W),
+            device=device,
+            dtype=dtype
+        )
         
         # Option 2: Create from garment features (if available)
         # This is a simplified version - actual implementation might be more complex
@@ -244,25 +252,23 @@ class DreamFitSamplerV4:
             # This is a placeholder - actual reshaping would be more sophisticated
             pass
         
-        return garment_latent.to(device, dtype=dtype)
+        return garment_latent
     
     def _create_garment_conditioning(self, base_conditioning, garment_features):
         """Create conditioning specifically for garment"""
-        garment_cond = []
+        # Use node_helpers to properly set conditioning values
+        garment_values = {
+            "is_garment_pass": True
+        }
         
-        for item in base_conditioning:
-            if isinstance(item, list) and len(item) == 2:
-                cond_tensor, extras = item
-                new_extras = extras.copy() if isinstance(extras, dict) else {}
-                
-                # Add garment-specific markers
-                new_extras["is_garment_pass"] = True
-                if garment_features:
-                    new_extras["garment_features"] = garment_features
-                
-                garment_cond.append([cond_tensor, new_extras])
-            else:
-                garment_cond.append(item)
+        if garment_features:
+            garment_values["garment_features"] = garment_features
+        
+        # Use ComfyUI's proper conditioning manipulation
+        garment_cond = node_helpers.conditioning_set_values(
+            base_conditioning,
+            garment_values
+        )
         
         return garment_cond
     
@@ -271,25 +277,8 @@ class DreamFitSamplerV4:
         # Get timestep 0 (no noise)
         timestep = torch.zeros((latent.shape[0],), device=device, dtype=torch.long)
         
-        # Convert timestep to model's expected format
-        if hasattr(model, 'model'):
-            # It's a ModelPatcher
-            actual_model = model.model
-            model_sampling = model.model_sampling
-        else:
-            actual_model = model
-            model_sampling = None
-        
-        # Prepare model input
-        if model_sampling is not None:
-            # Use model's sampling configuration
-            timestep_float = timestep.float()
-            sigma = model_sampling.sigma(timestep_float)
-            model_input = model_sampling.calculate_input(sigma, latent)
-        else:
-            # Direct input
-            model_input = latent
-            sigma = None
+        # For write pass with timestep=0, model_input is just the latent
+        model_input = latent.to(device, dtype=dtype)
         
         # Execute forward pass
         with torch.no_grad():
@@ -299,16 +288,16 @@ class DreamFitSamplerV4:
                     # Use ComfyUI's model interface
                     _ = model.apply_model(
                         model_input,
-                        timestep_float if model_sampling else timestep,
+                        timestep,
                         c=conditioning
                     )
                 except Exception as e:
                     print(f"Warning: Write pass failed: {e}")
                     raise
             else:
-                # Direct model call
+                # Model doesn't have apply_model method
                 print("Warning: Model doesn't have apply_model method")
-                pass
+                raise ValueError("Model must have apply_model method for DreamFit sampling")
         
         return None
     
@@ -323,6 +312,19 @@ class DreamFitSamplerV4:
             return x
         
         return callback
+    
+    @classmethod
+    def VALIDATE_INPUTS(cls, model, **kwargs):
+        """Validate inputs before execution"""
+        # Check if model has required methods
+        if not hasattr(model, 'apply_model'):
+            return "Model must have apply_model method for DreamFit sampling"
+        
+        # Check if model has DreamFit features when expected
+        if hasattr(model, 'dreamfit_features') and not isinstance(model.dreamfit_features, dict):
+            return "Model's dreamfit_features must be a dictionary"
+        
+        return True
 
 
 # Node registration
