@@ -207,9 +207,39 @@ class DreamFitDoubleStreamProcessor(nn.Module):
     
     def _forward_normal_mode(self, attn, img, txt, vec, pe):
         """Normal mode: Standard attention without garment features"""
-        # This is a simplified version - in practice, would call the original processor
-        # For now, return inputs unchanged
-        print("Warning: Using fallback normal mode in DreamFitDoubleStreamProcessor")
+        # Use the original block's processing
+        img_mod1, img_mod2 = attn.img_mod(vec)
+        txt_mod1, txt_mod2 = attn.txt_mod(vec)
+        
+        # Prepare image for attention
+        img_modulated = attn.img_norm1(img)
+        img_modulated = (1 + img_mod1.scale) * img_modulated + img_mod1.shift
+        img_qkv = attn.img_attn.qkv(img_modulated)
+        img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
+        img_q, img_k = attn.img_attn.norm(img_q, img_k, img_v)
+        
+        # Prepare text for attention
+        txt_modulated = attn.txt_norm1(txt)
+        txt_modulated = (1 + txt_mod1.scale) * txt_modulated + txt_mod1.shift
+        txt_qkv = attn.txt_attn.qkv(txt_modulated)
+        txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
+        txt_q, txt_k = attn.txt_attn.norm(txt_q, txt_k, txt_v)
+        
+        # Run attention
+        q = torch.cat((txt_q, img_q), dim=2)
+        k = torch.cat((txt_k, img_k), dim=2)
+        v = torch.cat((txt_v, img_v), dim=2)
+        
+        attn_out = attention(q, k, v, pe=pe)
+        txt_attn, img_attn = attn_out[:, :txt.shape[1]], attn_out[:, txt.shape[1]:]
+        
+        # Apply output projections
+        img = img + img_mod1.gate * attn.img_attn.proj(img_attn)
+        img = img + img_mod2.gate * attn.img_mlp((1 + img_mod2.scale) * attn.img_norm2(img) + img_mod2.shift)
+        
+        txt = txt + txt_mod1.gate * attn.txt_attn.proj(txt_attn)
+        txt = txt + txt_mod2.gate * attn.txt_mlp((1 + txt_mod2.scale) * attn.txt_norm2(txt) + txt_mod2.shift)
+        
         return img, txt
     
     def reset(self):
@@ -348,9 +378,27 @@ class DreamFitSingleStreamProcessor(nn.Module):
         return x + mod.gate * output
     
     def _forward_normal_mode(self, attn, x, vec, pe):
-        """Normal mode"""
-        print("Warning: Using fallback normal mode in DreamFitSingleStreamProcessor")
-        return x
+        """Normal mode: Standard single-stream attention"""
+        # Get modulation
+        mod, _ = attn.modulation(vec)
+        
+        # Modulate
+        x_mod = (1 + mod.scale) * attn.pre_norm(x) + mod.shift
+        
+        # QKV and MLP
+        qkv, mlp = torch.split(attn.linear1(x_mod), [3 * self.hidden_size, attn.mlp_hidden_dim], dim=-1)
+        
+        # Attention
+        q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
+        q, k = attn.norm(q, k, v)
+        
+        # Compute attention
+        attn_out = attention(q, k, v, pe=pe)
+        
+        # Apply output projection
+        output = attn.linear2(torch.cat((attn_out, attn.mlp_act(mlp)), 2))
+        
+        return x + mod.gate * output
     
     def reset(self):
         """Reset stored features"""
