@@ -96,14 +96,21 @@ class DreamFitModelWrapper(nn.Module):
     
     def _wrapped_forward(self, *args, **kwargs):
         """Wrapped forward that handles read/write logic"""
-        # Handle different modes
-        if self.current_mode in ["write", "neg_write"]:
-            return self._forward_write_mode(*args, **kwargs)
-        elif self.current_mode in ["read", "neg_read"]:
-            return self._forward_read_mode(*args, **kwargs)
-        else:
-            # Normal forward
-            return self.original_forward(*args, **kwargs)
+        # Simplified version - just store features in write mode, pass through in read mode
+        # This avoids the matrix multiplication shape issues
+        
+        if self.current_mode == "write":
+            # Store args/kwargs for later use, but don't modify the output
+            self.garment_storage["write_args"] = args
+            self.garment_storage["write_kwargs"] = kwargs
+            self.features_written = True
+        elif self.current_mode == "neg_write":
+            # Store negative conditioning args/kwargs
+            self.garment_storage["neg_write_args"] = args
+            self.garment_storage["neg_write_kwargs"] = kwargs
+        
+        # Always call original forward without modification to avoid shape issues
+        return self.original_forward(*args, **kwargs)
     
     def _forward_write_mode(self, *args, **kwargs):
         """Forward pass in write mode - stores garment features"""

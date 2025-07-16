@@ -290,6 +290,7 @@ class DreamFitKSamplerV3:
         
         # Extract latent
         latent = latent_image["samples"]
+        print(f"DEBUG: Latent shape: {latent.shape}, dtype: {latent.dtype}, device: {latent.device}")
         
         # Convert DreamFitFeatures object to dict if needed
         if garment_features is not None and hasattr(garment_features, 'to_dict'):
@@ -335,47 +336,75 @@ class DreamFitKSamplerV3:
             # Switch to read mode
             wrapped_model.set_mode("read")
             
-            # Use ComfyUI's standard sampling
-            import comfy.sample
-            
-            # Generate noise for sampling
-            generator = torch.Generator(device=device).manual_seed(seed)
-            noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
-            
-            denoised = comfy.sample.sample(
-                wrapped_model,
-                noise=noise,
-                steps=steps,
-                cfg=cfg,
-                sampler_name=sampler_name,
-                scheduler=scheduler,
-                positive=positive,
-                negative=negative,
-                latent_image=latent,
-                denoise=denoise,
-                seed=seed
-            )
+            # Use nodes.common_ksampler for better compatibility
+            import nodes
+            if hasattr(nodes, 'common_ksampler'):
+                denoised = nodes.common_ksampler(
+                    model=wrapped_model,
+                    seed=seed,
+                    steps=steps,
+                    cfg=cfg,
+                    sampler_name=sampler_name,
+                    scheduler=scheduler,
+                    positive=positive,
+                    negative=negative,
+                    latent=latent_image,  # Pass the full latent dict
+                    denoise=denoise
+                )
+            else:
+                # Fallback to direct sampling
+                import comfy.sample
+                generator = torch.Generator(device=device).manual_seed(seed)
+                noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
+                
+                denoised = comfy.sample.sample(
+                    wrapped_model,
+                    noise=noise,
+                    steps=steps,
+                    cfg=cfg,
+                    sampler_name=sampler_name,
+                    scheduler=scheduler,
+                    positive=positive,
+                    negative=negative,
+                    latent_image=latent,
+                    denoise=denoise,
+                    seed=seed
+                )
         else:
             # No garment features, use standard sampling
-            import comfy.sample
-            
-            # Generate noise for sampling
-            generator = torch.Generator(device=device).manual_seed(seed)
-            noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
-            
-            denoised = comfy.sample.sample(
-                model,
-                noise=noise,
-                steps=steps,
-                cfg=cfg,
-                sampler_name=sampler_name,
-                scheduler=scheduler,
-                positive=positive,
-                negative=negative,
-                latent_image=latent,
-                denoise=denoise,
-                seed=seed
-            )
+            import nodes
+            if hasattr(nodes, 'common_ksampler'):
+                denoised = nodes.common_ksampler(
+                    model=model,
+                    seed=seed,
+                    steps=steps,
+                    cfg=cfg,
+                    sampler_name=sampler_name,
+                    scheduler=scheduler,
+                    positive=positive,
+                    negative=negative,
+                    latent=latent_image,  # Pass the full latent dict
+                    denoise=denoise
+                )
+            else:
+                # Fallback to direct sampling  
+                import comfy.sample
+                generator = torch.Generator(device=device).manual_seed(seed)
+                noise = torch.randn(latent.shape, generator=generator, device=device, dtype=latent.dtype)
+                
+                denoised = comfy.sample.sample(
+                    model,
+                    noise=noise,
+                    steps=steps,
+                    cfg=cfg,
+                    sampler_name=sampler_name,
+                    scheduler=scheduler,
+                    positive=positive,
+                    negative=negative,
+                    latent_image=latent,
+                    denoise=denoise,
+                    seed=seed
+                )
         
         # Return in ComfyUI format
         out = latent_image.copy()
