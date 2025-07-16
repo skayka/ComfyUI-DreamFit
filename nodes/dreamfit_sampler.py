@@ -21,6 +21,7 @@ import comfy.sample
 import comfy.utils
 import node_helpers
 from comfy import model_management
+from comfy.ldm.flux.layers import timestep_embedding
 
 # Import DreamFit components
 try:
@@ -37,6 +38,88 @@ except ImportError as e:
     raise
 
 import math
+
+
+def forward_orig_dreamfit(
+    self,
+    img, img_ids, txt, txt_ids, timesteps, y, guidance, control, transformer_options, attn_mask=None
+):
+    """
+    Custom forward_orig for DreamFit that supports rw_mode and processors.
+    Based on PuLID-Flux approach but adapted for DreamFit's two-pass mechanism.
+    """
+    if img.ndim != 3 or txt.ndim != 3:
+        raise ValueError("Input img and txt tensors must have 3 dimensions.")
+    
+    # Extract rw_mode from transformer_options
+    rw_mode = transformer_options.get('rw_mode', 'normal')
+    
+    # running on sequences img
+    img = self.img_in(img)
+    vec = self.time_in(timestep_embedding(timesteps, 256).to(img.dtype))
+    if self.params.guidance_embed:
+        if guidance is None:
+            raise ValueError("Didn't get guidance strength for guidance distilled model.")
+        vec = vec + self.guidance_in(timestep_embedding(guidance, 256).to(img.dtype))
+    
+    vec = vec + self.vector_in(y)
+    txt = self.txt_in(txt)
+    
+    ids = torch.cat((txt_ids, img_ids), dim=1)
+    pe = self.pe_embedder(ids)
+    
+    # Process through double blocks
+    for i, block in enumerate(self.double_blocks):
+        # Normal block forward
+        img, txt = block(img=img, txt=txt, vec=vec, pe=pe)
+        
+        # Apply DreamFit processor if available
+        if hasattr(self, 'dreamfit_processors'):
+            processor_name = f"double_blocks.{i}.processor"
+            if processor_name in self.dreamfit_processors:
+                processor = self.dreamfit_processors[processor_name]
+                # Call processor with DreamFit signature
+                img, txt = processor(block, img, txt, vec, pe, rw_mode=rw_mode)
+        
+        # Handle controlnet if present
+        if control is not None:
+            control_i = control.get("input")
+            if i < len(control_i):
+                add = control_i[i]
+                if add is not None:
+                    img += add
+    
+    img = torch.cat((txt, img), 1)
+    
+    # Process through single blocks
+    for i, block in enumerate(self.single_blocks):
+        # Normal block forward
+        img = block(img, vec=vec, pe=pe)
+        
+        # Apply DreamFit processor if available
+        if hasattr(self, 'dreamfit_processors'):
+            processor_name = f"single_blocks.{i}.processor"
+            if processor_name in self.dreamfit_processors:
+                processor = self.dreamfit_processors[processor_name]
+                # Extract real_img (without txt part)
+                real_img, txt_part = img[:, txt.shape[1]:, ...], img[:, :txt.shape[1], ...]
+                # Call processor on real_img only
+                real_img = processor(block, real_img, vec, pe, rw_mode=rw_mode)
+                # Recombine
+                img = torch.cat((txt_part, real_img), 1)
+        
+        # Handle controlnet if present
+        if control is not None:
+            control_o = control.get("output")
+            if i < len(control_o):
+                add = control_o[i]
+                if add is not None:
+                    img[:, txt.shape[1]:, ...] += add
+    
+    img = img[:, txt.shape[1]:, ...]
+    
+    img = self.final_layer(img, vec)  # (N, T, patch_size ** 2 * out_channels)
+    return img
 
 
 class FluxModelWrapper:
@@ -97,42 +180,14 @@ class FluxModelWrapper:
         print(f"  - rw_mode: {rw_mode}")
         print(f"  - diffusion_model type: {type(self.diffusion_model)}")
         print(f"  - has forward_orig: {hasattr(self.diffusion_model, 'forward_orig')}")
-        # Handle DreamFit's special read/write modes
-        if rw_mode in ["write", "neg_write"]:
-            # Store features for later use
-            # For write mode, we need to run the model and store intermediate features
-            # This is handled by the DreamFit processors we've already set up
-            pass
-        elif rw_mode in ["read", "neg_read"]:
-            # Use stored features during generation
-            # The processors will automatically use the stored features
-            pass
         
-        # Prepare inputs for ComfyUI's Flux forward method
-        # The forward method expects: (x, timestep, context, y, guidance, ...)
+        # Create transformer_options with rw_mode
+        transformer_options = kwargs.get('transformer_options', {})
+        transformer_options['rw_mode'] = rw_mode
         
-        # Unpack image from DreamFit format to ComfyUI format
-        # DreamFit packs as: "b (h w) (c ph pw)" with ph=2, pw=2
-        # ComfyUI expects: "b c h w"
-        b, hw, cpatchpatch = img.shape
-        
-        # Calculate dimensions
-        # Assuming square images for now (can be adjusted)
-        h_w = int(math.sqrt(hw))
-        h = w = h_w
-        c = cpatchpatch // 4  # Since ph=2, pw=2
-        
-        # Reshape to ComfyUI format
-        x = img.view(b, h, w, c, 2, 2)
-        x = x.permute(0, 3, 1, 4, 2, 5)  # b, c, h, ph, w, pw
-        x = x.reshape(b, c, h * 2, w * 2)  # b, c, h*ph, w*pw
-        
-        # Call the underlying model
-        # We need to check if this is the DreamFit-modified Flux model
-        # that expects the direct parameters (img, img_ids, txt, txt_ids, etc.)
+        # Call forward_orig with the packed format
         if hasattr(self.diffusion_model, 'forward_orig'):
-            # This is the DreamFit Flux model, call it directly
-            # No need to unpack/repack, just pass through
+            print(f"  - Using forward_orig method")
             return self.diffusion_model.forward_orig(
                 img=img,
                 img_ids=img_ids,
@@ -141,46 +196,13 @@ class FluxModelWrapper:
                 timesteps=timesteps,
                 y=y,
                 guidance=guidance,
-                rw_mode=rw_mode,
-                **kwargs
-            )
-        
-        # Otherwise, translate to ComfyUI's format
-        # Check if we can call the diffusion model directly
-        if hasattr(self.diffusion_model, 'forward'):
-            # Call forward with ComfyUI's expected parameters
-            output = self.diffusion_model.forward(
-                x=x,
-                timestep=timesteps,
-                context=txt,  # Text embeddings
-                y=y,  # CLIP embeddings
-                guidance=guidance,
-                transformer_options=kwargs.get('transformer_options', {}),
-                **kwargs
+                control=kwargs.get('control'),
+                transformer_options=transformer_options,
+                attn_mask=kwargs.get('attn_mask')
             )
         else:
-            # If forward doesn't exist, try calling directly
-            # This handles the case where the model might be wrapped differently
-            output = self.diffusion_model(
-                x,
-                timesteps,
-                context=txt,
-                y=y,
-                guidance=guidance,
-                **kwargs
-            )
-        
-        # Convert output back to DreamFit format
-        # ComfyUI returns in "b c h w" format
-        # DreamFit expects "b (h w) (c ph pw)" format
-        b, c, h_out, w_out = output.shape
-        
-        # Pack back to DreamFit format
-        output = output.view(b, c, h_out // 2, 2, w_out // 2, 2)
-        output = output.permute(0, 2, 4, 1, 3, 5)  # b, h, w, c, ph, pw
-        output = output.reshape(b, (h_out // 2) * (w_out // 2), c * 4)
-        
-        return output
+            # This shouldn't happen with ComfyUI's Flux model
+            raise RuntimeError("Model doesn't have forward_orig method")
 
 
 class DreamFitSampler:
@@ -311,13 +333,31 @@ class DreamFitSampler:
         original_processors = getattr(diffusion_model, 'attn_processors', {}).copy() if hasattr(diffusion_model, 'attn_processors') else {}
         
         try:
-            # Apply DreamFit processors
+            # Apply DreamFit processors using PuLID-style patching
             print("Applying DreamFit processors...")
-            lora_processors = self._create_and_load_processors(diffusion_model, checkpoint, rank)
-            if hasattr(diffusion_model, 'set_attn_processor'):
-                diffusion_model.set_attn_processor(lora_processors)
-            else:
-                print("Warning: Model doesn't support set_attn_processor")
+            
+            # Create the model wrapper
+            print("Creating FluxModelWrapper...")
+            wrapped_model = FluxModelWrapper(model, device, dtype)
+            
+            # Check if we already patched the model
+            if not hasattr(wrapped_model.diffusion_model, 'dreamfit_processors'):
+                print("Patching model with DreamFit support...")
+                # Add DreamFit data storage
+                wrapped_model.diffusion_model.dreamfit_processors = {}
+                wrapped_model.diffusion_model.dreamfit_rw_mode = 'normal'
+                
+                # Replace forward_orig with our custom version
+                if hasattr(wrapped_model.diffusion_model, 'forward_orig'):
+                    # Bind our custom forward_orig to the model
+                    new_forward = forward_orig_dreamfit.__get__(wrapped_model.diffusion_model, wrapped_model.diffusion_model.__class__)
+                    setattr(wrapped_model.diffusion_model, 'forward_orig', new_forward)
+                    print("Patched forward_orig with DreamFit support")
+            
+            # Create and load processors
+            lora_processors = self._create_and_load_processors(wrapped_model.diffusion_model, checkpoint, rank)
+            wrapped_model.diffusion_model.dreamfit_processors = lora_processors
+            print(f"Loaded {len(lora_processors)} DreamFit processors")
             
             # Load modulation LoRA weights
             self._load_modulation_lora(diffusion_model, checkpoint)
@@ -453,9 +493,7 @@ class DreamFitSampler:
                     print(f"  - forward signature: {sig}")
                     print(f"  - forward parameters: {list(sig.parameters.keys())}")
             
-            # Create the model wrapper
-            print("Creating FluxModelWrapper...")
-            wrapped_model = FluxModelWrapper(actual_model, device, dtype)
+            # The wrapped_model is already created above
             
             # Add try-except to get more detailed error info
             try:
@@ -484,10 +522,14 @@ class DreamFitSampler:
             return ({"samples": samples},)
             
         finally:
-            # Always restore original processors
-            print("Restoring original model processors...")
-            if hasattr(diffusion_model, 'set_attn_processor') and original_processors:
-                diffusion_model.set_attn_processor(original_processors)
+            # Always restore original processors and forward_orig
+            print("Restoring original model state...")
+            if hasattr(wrapped_model.diffusion_model, 'dreamfit_processors'):
+                # Clear our processors
+                wrapped_model.diffusion_model.dreamfit_processors = {}
+            
+            # Note: We don't restore forward_orig as other nodes might be using the patched version
+            # This is similar to how PuLID handles it
     
     def _create_and_load_processors(self, model, checkpoint, rank):
         """Create DreamFit processors and load their weights"""
