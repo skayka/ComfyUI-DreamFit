@@ -461,14 +461,21 @@ class DreamFitUnified:
                         if not hasattr(block, '_original_forward'):
                             block._original_forward = block.forward
                         
+                        # Store processor on the block
+                        block._dreamfit_processor = processor
+                        block._dreamfit_idx = idx
+                        
                         # Create a wrapper that properly handles the processor
-                        original_block = block
+                        def make_forward(block_ref, proc_ref):
+                            def new_forward(img, txt, vec, pe, **kwargs):
+                                # Debug: Log when forward is called
+                                print(f"DreamFit block {block_ref._dreamfit_idx} forward called, mode: {proc_ref.current_mode}")
+                                # Call processor with the block
+                                return proc_ref(block_ref, img, txt, vec, pe, **kwargs)
+                            return new_forward
                         
-                        def forward_with_processor(img, txt, vec, pe, **kwargs):
-                            # Call processor with the block
-                            return processor(original_block, img, txt, vec, pe, **kwargs)
-                        
-                        block.forward = forward_with_processor
+                        # Replace forward method
+                        block.forward = make_forward(block, processor)
                         block.processor = processor
                         block.current_mode = "normal"  # Add mode tracking
         
