@@ -792,46 +792,45 @@ class DreamFitSampler:
         # Add img_mlp_lora layers to double blocks
         if hasattr(model, 'double_blocks'):
             for i, block in enumerate(model.double_blocks):
-                if hasattr(block, 'img_attn'):
-                    # Create img_mlp_lora_1 and img_mlp_lora_2
-                    block.img_attn.img_mlp_lora_1 = FixedLoRALinearLayer(
-                        in_features=3072 * 4,
-                        out_features=3072 * 4,
-                        rank=32,
-                        network_alpha=16,
-                        device=device,
-                        dtype=dtype
-                    )
-                    
-                    block.img_attn.img_mlp_lora_2 = FixedLoRALinearLayer(
-                        in_features=3072 * 4,
-                        out_features=3072,
-                        rank=32,
-                        network_alpha=16,
-                        device=device,
-                        dtype=dtype
-                    )
-                    
-                    # Load weights for these layers from checkpoint if available
-                    lora1_state = {}
-                    lora2_state = {}
-                    prefix = f"double_blocks.{i}.img_attn."
-                    
-                    for key in checkpoint:
-                        if key.startswith(prefix):
-                            if "img_mlp_lora_1" in key:
-                                # Extract parameter name after img_mlp_lora_1.
-                                param_name = key.split("img_mlp_lora_1.")[-1]
-                                lora1_state[param_name] = checkpoint[key].to(device, dtype=dtype)
-                            elif "img_mlp_lora_2" in key:
-                                # Extract parameter name after img_mlp_lora_2.
-                                param_name = key.split("img_mlp_lora_2.")[-1]
-                                lora2_state[param_name] = checkpoint[key].to(device, dtype=dtype)
-                    
-                    if lora1_state:
-                        block.img_attn.img_mlp_lora_1.load_state_dict(lora1_state, strict=False)
-                    if lora2_state:
-                        block.img_attn.img_mlp_lora_2.load_state_dict(lora2_state, strict=False)
+                # Create img_mlp_lora_1 and img_mlp_lora_2 on the block itself
+                block.img_mlp_lora_1 = FixedLoRALinearLayer(
+                    in_features=3072 * 4,
+                    out_features=3072 * 4,
+                    rank=32,
+                    network_alpha=16,
+                    device=device,
+                    dtype=dtype
+                )
+                
+                block.img_mlp_lora_2 = FixedLoRALinearLayer(
+                    in_features=3072 * 4,
+                    out_features=3072,
+                    rank=32,
+                    network_alpha=16,
+                    device=device,
+                    dtype=dtype
+                )
+                
+                # Load weights for these layers from checkpoint if available
+                lora1_state = {}
+                lora2_state = {}
+                prefix = f"double_blocks.{i}."
+                
+                for key in checkpoint:
+                    if key.startswith(prefix):
+                        if "img_mlp_lora_1" in key:
+                            # Extract parameter name after img_mlp_lora_1.
+                            param_name = key.split("img_mlp_lora_1.")[-1]
+                            lora1_state[param_name] = checkpoint[key].to(device, dtype=dtype)
+                        elif "img_mlp_lora_2" in key:
+                            # Extract parameter name after img_mlp_lora_2.
+                            param_name = key.split("img_mlp_lora_2.")[-1]
+                            lora2_state[param_name] = checkpoint[key].to(device, dtype=dtype)
+                
+                if lora1_state:
+                    block.img_mlp_lora_1.load_state_dict(lora1_state, strict=False)
+                if lora2_state:
+                    block.img_mlp_lora_2.load_state_dict(lora2_state, strict=False)
         
         print("Model structure prepared for DreamFit")
     
