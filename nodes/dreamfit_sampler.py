@@ -87,24 +87,74 @@ class ProcessorWrapper:
                 block.modulation = orig_modulation
 
 
+class FixedLoRALinearLayer(nn.Module):
+    """LoRA layer that properly handles device placement"""
+    def __init__(self, in_features, out_features, rank=4, network_alpha=None, device=None, dtype=None):
+        super().__init__()
+        self.down = nn.Linear(in_features, rank, bias=False, device=device, dtype=dtype)
+        self.up = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
+        self.network_alpha = network_alpha
+        self.rank = rank
+        
+        nn.init.normal_(self.down.weight, std=1 / rank)
+        nn.init.zeros_(self.up.weight)
+    
+    def forward(self, hidden_states):
+        orig_dtype = hidden_states.dtype
+        dtype = self.down.weight.dtype
+        
+        down_hidden_states = self.down(hidden_states.to(dtype))
+        up_hidden_states = self.up(down_hidden_states)
+        
+        if self.network_alpha is not None:
+            up_hidden_states *= self.network_alpha / self.rank
+        
+        return up_hidden_states.to(orig_dtype)
+
+
 class FixedDoubleStreamBlockLoraProcessor(DoubleStreamBlockLoraProcessor):
     """Fixed version that properly handles device placement"""
     def __init__(self, dim: int, rank=4, network_alpha=None, lora_weight=1, device=None, dtype=None):
-        # Call parent init without device/dtype
-        super().__init__(dim, rank, network_alpha, lora_weight)
-        # Move all modules to correct device
-        if device is not None:
-            self.to(device, dtype=dtype)
+        # Don't call parent init, recreate everything with proper device
+        super(DoubleStreamBlockLoraProcessor, self).__init__()  # Skip parent, go to ModelMixin
+        
+        # Create LoRA layers with device/dtype
+        self.ref_qkv_lora_q = FixedLoRALinearLayer(dim, dim, rank, network_alpha, device=device, dtype=dtype)
+        self.ref_qkv_lora_k = FixedLoRALinearLayer(dim, dim, rank, network_alpha, device=device, dtype=dtype)
+        self.ref_qkv_lora_v = FixedLoRALinearLayer(dim, dim, rank, network_alpha, device=device, dtype=dtype)
+        self.ref_proj_lora1 = FixedLoRALinearLayer(dim, dim, rank, network_alpha, device=device, dtype=dtype)
+        
+        self.lora_weight = lora_weight
+        
+        self.bank_img_q = None
+        self.bank_img_k = None
+        self.bank_img_v = None
+        self.bank_neg_img_q = None
+        self.bank_neg_img_k = None
+        self.bank_neg_img_v = None
 
 
 class FixedSingleStreamBlockLoraProcessor(SingleStreamBlockLoraProcessor):
     """Fixed version that properly handles device placement"""
     def __init__(self, dim: int, rank: int = 4, network_alpha=None, lora_weight: float = 1, ip_scale=1.0, device=None, dtype=None):
-        # Call parent init without device/dtype
-        super().__init__(dim, rank, network_alpha, lora_weight, ip_scale)
-        # Move all modules to correct device
-        if device is not None:
-            self.to(device, dtype=dtype)
+        # Don't call parent init, recreate everything with proper device
+        super(SingleStreamBlockLoraProcessor, self).__init__()  # Skip parent, go to ModelMixin
+        
+        # Create LoRA layers with device/dtype
+        self.ref_qkv_lora_q = FixedLoRALinearLayer(dim, dim, rank, network_alpha, device=device, dtype=dtype)
+        self.ref_qkv_lora_k = FixedLoRALinearLayer(dim, dim, rank, network_alpha, device=device, dtype=dtype)
+        self.ref_qkv_lora_v = FixedLoRALinearLayer(dim, dim, rank, network_alpha, device=device, dtype=dtype)
+        self.ref_proj_lora = FixedLoRALinearLayer(15360, dim, rank*2, network_alpha*2, device=device, dtype=dtype)
+        
+        self.lora_weight = lora_weight
+        self.ip_scale = ip_scale
+        
+        self.bank_img_q = None
+        self.bank_img_k = None
+        self.bank_img_v = None
+        self.bank_neg_img_q = None
+        self.bank_neg_img_k = None
+        self.bank_neg_img_v = None
 
 
 def forward_orig_dreamfit(
