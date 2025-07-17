@@ -14,11 +14,6 @@ DREAMFIT_PATH = os.path.join(os.path.dirname(__file__), "..", "DreamFit-official
 if DREAMFIT_PATH not in sys.path:
     sys.path.insert(0, DREAMFIT_PATH)
 
-# Add our patches to Python path (higher priority)
-PATCHES_PATH = os.path.join(os.path.dirname(__file__), "..", "dreamfit_patches")
-if PATCHES_PATH not in sys.path:
-    sys.path.insert(0, PATCHES_PATH)
-
 # ComfyUI imports
 import comfy.model_management
 import comfy.samplers
@@ -90,6 +85,26 @@ class ProcessorWrapper:
                 block.txt_mod = orig_txt_mod
             if orig_modulation is not None:
                 block.modulation = orig_modulation
+
+
+class FixedDoubleStreamBlockLoraProcessor(DoubleStreamBlockLoraProcessor):
+    """Fixed version that properly handles device placement"""
+    def __init__(self, dim: int, rank=4, network_alpha=None, lora_weight=1, device=None, dtype=None):
+        # Call parent init without device/dtype
+        super().__init__(dim, rank, network_alpha, lora_weight)
+        # Move all modules to correct device
+        if device is not None:
+            self.to(device, dtype=dtype)
+
+
+class FixedSingleStreamBlockLoraProcessor(SingleStreamBlockLoraProcessor):
+    """Fixed version that properly handles device placement"""
+    def __init__(self, dim: int, rank: int = 4, network_alpha=None, lora_weight: float = 1, ip_scale=1.0, device=None, dtype=None):
+        # Call parent init without device/dtype
+        super().__init__(dim, rank, network_alpha, lora_weight, ip_scale)
+        # Move all modules to correct device
+        if device is not None:
+            self.to(device, dtype=dtype)
 
 
 def forward_orig_dreamfit(
@@ -621,7 +636,7 @@ class DreamFitSampler:
         # Process all double blocks (0-18)
         for i in range(19):
             name = f"double_blocks.{i}"
-            processor = DoubleStreamBlockLoraProcessor(
+            processor = FixedDoubleStreamBlockLoraProcessor(
                 dim=3072,
                 rank=rank,
                 network_alpha=16,
@@ -653,7 +668,7 @@ class DreamFitSampler:
         # Process all single blocks (0-37)
         for i in range(38):
             name = f"single_blocks.{i}"
-            processor = SingleStreamBlockLoraProcessor(
+            processor = FixedSingleStreamBlockLoraProcessor(
                 dim=3072,
                 rank=rank,
                 network_alpha=16,
