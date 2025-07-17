@@ -697,8 +697,25 @@ class DreamFitSampler:
             # Always restore original processors and forward_orig
             print("Restoring original model state...")
             if wrapped_model and hasattr(wrapped_model.diffusion_model, 'dreamfit_processors'):
+                # Clear stored features in processors before removing
+                for name, proc in wrapped_model.diffusion_model.dreamfit_processors.items():
+                    if hasattr(proc, 'processor'):
+                        p = proc.processor
+                        # Clear SingleStreamBlock processor banks
+                        if hasattr(p, 'bank_img_q'):
+                            p.bank_img_q = None
+                            p.bank_img_k = None
+                            p.bank_img_v = None
+                            p.bank_neg_img_q = None
+                            p.bank_neg_img_k = None
+                            p.bank_neg_img_v = None
+                
                 # Clear our processors
                 wrapped_model.diffusion_model.dreamfit_processors = {}
+            
+            # Force garbage collection
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
             # Note: We don't restore forward_orig as other nodes might be using the patched version
             # This is similar to how PuLID handles it
@@ -717,9 +734,23 @@ class DreamFitSampler:
         
         print(f"Creating processors on device: {device}, dtype: {dtype}")
         
-        # Process all double blocks (0-18)
+        # First, check which processors actually have weights in checkpoint
+        processor_blocks = set()
+        for key in checkpoint:
+            if "processor" in key:
+                # Extract block name (e.g., "double_blocks.5" or "single_blocks.10")
+                parts = key.split('.')
+                if len(parts) >= 2 and parts[1].isdigit():
+                    block_name = f"{parts[0]}.{parts[1]}"
+                    processor_blocks.add(block_name)
+        
+        print(f"Checkpoint contains weights for {len(processor_blocks)} processors: {sorted(processor_blocks)}")
+        
+        # Only create processors that have weights in checkpoint
         for i in range(19):
             name = f"double_blocks.{i}"
+            if name not in processor_blocks:
+                continue  # Skip if no weights in checkpoint
             processor = FixedDoubleStreamBlockLoraProcessor(
                 dim=3072,
                 rank=rank,
@@ -749,9 +780,11 @@ class DreamFitSampler:
             
             processors[f"{name}.processor"] = processor
         
-        # Process all single blocks (0-37)
+        # Only create single block processors that have weights
         for i in range(38):
             name = f"single_blocks.{i}"
+            if name not in processor_blocks:
+                continue  # Skip if no weights in checkpoint
             processor = FixedSingleStreamBlockLoraProcessor(
                 dim=3072,
                 rank=rank,
