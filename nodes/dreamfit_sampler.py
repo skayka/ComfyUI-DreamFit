@@ -40,6 +40,14 @@ except ImportError as e:
 import math
 
 
+def modulation_forward_with_rw_mode(original_forward):
+    """Wrapper to make Modulation.forward accept rw_mode parameter"""
+    def forward(self, vec, rw_mode=None):
+        # Ignore rw_mode, just call original forward
+        return original_forward(self, vec)
+    return forward
+
+
 def forward_orig_dreamfit(
     self,
     img, img_ids, txt, txt_ids, timesteps, y, guidance, control, transformer_options, attn_mask=None
@@ -79,6 +87,7 @@ def forward_orig_dreamfit(
             if processor_name in self.dreamfit_processors:
                 processor = self.dreamfit_processors[processor_name]
                 # Call processor with DreamFit signature
+                # Note: processor handles rw_mode internally, but the block's img_mod doesn't accept it
                 img, txt = processor(block, img, txt, vec, pe, rw_mode=rw_mode)
         
         # Handle controlnet if present
@@ -360,6 +369,22 @@ class DreamFitSampler:
                     new_forward = forward_orig_dreamfit.__get__(wrapped_model.diffusion_model, wrapped_model.diffusion_model.__class__)
                     setattr(wrapped_model.diffusion_model, 'forward_orig', new_forward)
                     print("Patched forward_orig with DreamFit support")
+                
+                # Patch Modulation forward methods in all blocks to accept rw_mode
+                for i, block in enumerate(wrapped_model.diffusion_model.double_blocks):
+                    if hasattr(block, 'img_mod') and hasattr(block.img_mod, 'forward'):
+                        original_forward = block.img_mod.forward
+                        block.img_mod.forward = modulation_forward_with_rw_mode(original_forward).__get__(block.img_mod, block.img_mod.__class__)
+                    if hasattr(block, 'txt_mod') and hasattr(block.txt_mod, 'forward'):
+                        original_forward = block.txt_mod.forward
+                        block.txt_mod.forward = modulation_forward_with_rw_mode(original_forward).__get__(block.txt_mod, block.txt_mod.__class__)
+                
+                for i, block in enumerate(wrapped_model.diffusion_model.single_blocks):
+                    if hasattr(block, 'modulation') and hasattr(block.modulation, 'forward'):
+                        original_forward = block.modulation.forward
+                        block.modulation.forward = modulation_forward_with_rw_mode(original_forward).__get__(block.modulation, block.modulation.__class__)
+                
+                print("Patched Modulation forward methods to accept rw_mode")
             
             # Create and load processors
             lora_processors = self._create_and_load_processors(wrapped_model.diffusion_model, checkpoint, rank)
