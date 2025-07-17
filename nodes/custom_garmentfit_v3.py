@@ -415,12 +415,9 @@ class ApplyCustomGarmentFitV3:
             flux_model.dreamfit_data = {}
             flux_model.dreamfit_processors = {}
             
-            # Store original forward method
-            if not hasattr(flux_model, 'forward_orig'):
-                flux_model.forward_orig = flux_model.forward
-                # Replace with our enhanced forward
-                flux_model.forward = self._create_dreamfit_forward(flux_model)
-                logging.info("✓ Replaced FLUX forward method with DreamFit version")
+            # Patch transformer blocks instead of replacing forward method
+            self._patch_transformer_blocks(flux_model)
+            logging.info("✓ Patched FLUX transformer blocks with DreamFit LoRA")
         
         # Store garment data for this node
         flux_model.dreamfit_data[unique_id] = {
@@ -431,14 +428,15 @@ class ApplyCustomGarmentFitV3:
             'patcher': patcher
         }
         
-        # Create processors for blocks with LoRA weights
-        processors_created = 0
-        for lora_key, lora_layer in patcher.lora_layers.items():
-            if lora_key not in flux_model.dreamfit_processors:
-                flux_model.dreamfit_processors[lora_key] = lora_layer
-                processors_created += 1
+        # Store reference to flux_model in blocks for easy access
+        for i in range(19):
+            if hasattr(flux_model, 'double_blocks') and i < len(flux_model.double_blocks):
+                flux_model.double_blocks[i]._flux_model_ref = flux_model
+        for i in range(38):
+            if hasattr(flux_model, 'single_blocks') and i < len(flux_model.single_blocks):
+                flux_model.single_blocks[i]._flux_model_ref = flux_model
                 
-        logging.info(f"✓ Added DreamFit data (id: {unique_id[:8]}) with {processors_created} processors")
+        logging.info(f"✓ Added DreamFit data (id: {unique_id[:8]}) with {len(patcher.lora_layers)} LoRA layers")
         
         # Store cleanup callback
         def cleanup():
@@ -448,58 +446,143 @@ class ApplyCustomGarmentFitV3:
         
         return cleanup
         
-    def _create_dreamfit_forward(self, flux_model):
-        """Create DreamFit-enhanced forward method for FLUX model"""
+    def _patch_transformer_blocks(self, flux_model):
+        """Patch FLUX transformer blocks to apply LoRA transformations"""
         
-        def dreamfit_forward(img, img_ids, txt, txt_ids, timesteps, y, guidance=None, **kwargs):
-            """Enhanced FLUX forward with DreamFit garment injection"""
+        # Patch double_blocks (0-18)
+        for i in range(19):
+            if hasattr(flux_model, 'double_blocks') and i < len(flux_model.double_blocks):
+                block = flux_model.double_blocks[i]
+                if not hasattr(block, '_dreamfit_patched'):
+                    original_forward = block.forward
+                    block.forward = self._create_enhanced_block_forward(original_forward, f"double_{i}", block)
+                    block._dreamfit_patched = True
+                    logging.info(f"✓ Patched double_blocks[{i}]")
+        
+        # Patch single_blocks (0-37)  
+        for i in range(38):
+            if hasattr(flux_model, 'single_blocks') and i < len(flux_model.single_blocks):
+                block = flux_model.single_blocks[i]
+                if not hasattr(block, '_dreamfit_patched'):
+                    original_forward = block.forward
+                    block.forward = self._create_enhanced_block_forward(original_forward, f"single_{i}", block)
+                    block._dreamfit_patched = True
+                    logging.info(f"✓ Patched single_blocks[{i}]")
+    
+    def _create_enhanced_block_forward(self, original_forward, block_name, block):
+        """Create enhanced block forward that applies LoRA transformations"""
+        
+        def enhanced_forward(*args, **kwargs):
+            # Run original block processing
+            output = original_forward(*args, **kwargs)
             
-            # Call original forward method
-            if hasattr(flux_model, 'forward_orig'):
-                original_output = flux_model.forward_orig(img, img_ids, txt, txt_ids, timesteps, y, guidance, **kwargs)
+            # Apply DreamFit LoRA if active
+            if hasattr(block, '__self__') and hasattr(block.__self__, 'dreamfit_data'):
+                flux_model = block.__self__
             else:
-                # Fallback to super() call
-                original_output = super(flux_model.__class__, flux_model).forward(img, img_ids, txt, txt_ids, timesteps, y, guidance, **kwargs)
+                # Find the parent model
+                flux_model = self._find_flux_model(block)
             
-            # Apply DreamFit modifications if data exists
-            if hasattr(flux_model, "dreamfit_data") and flux_model.dreamfit_data:
+            if flux_model and hasattr(flux_model, "dreamfit_data") and flux_model.dreamfit_data:
+                # Get current timestep (passed in args)
+                timesteps = None
+                for arg in args:
+                    if hasattr(arg, 'dtype') and arg.dtype in [torch.float32, torch.float16, torch.bfloat16]:
+                        if arg.numel() == 1 or (arg.dim() == 1 and arg.shape[0] <= 8):  # Likely timestep
+                            timesteps = arg
+                            break
                 
-                # Check which nodes should be active at this timestep
-                active_data = []
-                for node_id, data in flux_model.dreamfit_data.items():
-                    sigma_start = data['sigma_start']
-                    sigma_end = data['sigma_end']
+                if timesteps is not None:
+                    current_sigma = timesteps.float().mean().item() if timesteps is not None else 999999999.9
                     
-                    # Convert timesteps to sigma-like values for comparison
-                    current_sigma = timesteps.float().mean().item()
-                    
-                    if sigma_end <= current_sigma <= sigma_start:
-                        active_data.append(data)
-                
-                if active_data:
-                    logging.info(f"🎯 DreamFit active: {len(active_data)} nodes at sigma={current_sigma:.3f}")
-                    
-                    # Apply garment features to the output
-                    for data in active_data:
-                        weight = data['weight']
-                        garment_embeds = data['garment_embeds']
-                        patcher = data['patcher']
+                    # Check for active DreamFit data
+                    for node_id, data in flux_model.dreamfit_data.items():
+                        sigma_start = data['sigma_start']
+                        sigma_end = data['sigma_end']
                         
-                        # Simple additive modification (following PuLID pattern)
-                        # This is a simplified approach - can be enhanced later
-                        if garment_embeds.shape[-1] == original_output.shape[-1]:
-                            # Apply garment influence
-                            garment_influence = garment_embeds.mean(dim=1, keepdim=True)  # Pool over tokens
-                            garment_influence = garment_influence.expand_as(original_output[:, :garment_influence.shape[1], :])  # Match sequence length
+                        if sigma_end <= current_sigma <= sigma_start:
+                            weight = data['weight']
+                            garment_embeds = data['garment_embeds']
+                            patcher = data['patcher']
                             
-                            # Add garment influence to output
-                            original_output[:, :garment_influence.shape[1], :] += garment_influence * weight * 0.1
-                            
-                            logging.info(f"Applied garment influence: weight={weight}, shape={garment_influence.shape}")
+                            # Apply LoRA transformations for this block
+                            garment_influence = self._apply_block_lora(block_name, garment_embeds, patcher, weight, output)
+                            if garment_influence is not None:
+                                output = output + garment_influence
+                                logging.info(f"🎯 Applied LoRA to {block_name}: influence_norm={garment_influence.norm().item():.4f}")
+                            break
             
-            return original_output
+            return output
             
-        return dreamfit_forward
+        return enhanced_forward
+    
+    def _find_flux_model(self, block):
+        """Find the parent FLUX model from a block"""
+        # This is a helper to find the model that contains dreamfit_data
+        # We'll store a reference during patching
+        if hasattr(block, '_flux_model_ref'):
+            return block._flux_model_ref
+        return None
+    
+    def _apply_block_lora(self, block_name, garment_embeds, patcher, weight, current_features):
+        """Apply LoRA transformations for a specific block"""
+        
+        # Parse block name to find corresponding LoRA layers
+        block_type, block_idx = block_name.split('_')
+        
+        # Find LoRA layers for this block
+        q_key = f"{block_type}_{block_idx}_q"
+        k_key = f"{block_type}_{block_idx}_k" 
+        v_key = f"{block_type}_{block_idx}_v"
+        
+        q_lora = patcher.lora_layers.get(q_key)
+        k_lora = patcher.lora_layers.get(k_key)
+        v_lora = patcher.lora_layers.get(v_key)
+        
+        if not (q_lora or k_lora or v_lora):
+            return None
+            
+        try:
+            # Get dimensions from current features
+            B, L, D = current_features.shape
+            device = current_features.device
+            dtype = current_features.dtype
+            
+            # Prepare garment embeddings - reshape to match current features
+            garment_tokens = garment_embeds.to(device, dtype=dtype)
+            if garment_tokens.shape[0] < B:
+                garment_tokens = garment_tokens.repeat(B // garment_tokens.shape[0] + 1, 1, 1)[:B]
+            
+            # Create garment influence by applying available LoRA layers
+            total_influence = torch.zeros_like(current_features[:, :garment_tokens.shape[1], :])
+            
+            if q_lora:
+                q_influence = q_lora.apply(garment_tokens) * weight
+                if q_influence.shape[-1] == D:
+                    total_influence += q_influence * 0.3  # Scale for Q contribution
+            
+            if k_lora:
+                k_influence = k_lora.apply(garment_tokens) * weight  
+                if k_influence.shape[-1] == D:
+                    total_influence += k_influence * 0.3  # Scale for K contribution
+                    
+            if v_lora:
+                v_influence = v_lora.apply(garment_tokens) * weight
+                if v_influence.shape[-1] == D:
+                    total_influence += v_influence * 0.4  # Scale for V contribution
+            
+            # Pad or crop influence to match current features length
+            if total_influence.shape[1] < L:
+                padding = torch.zeros(B, L - total_influence.shape[1], D, device=device, dtype=dtype)
+                total_influence = torch.cat([total_influence, padding], dim=1)
+            elif total_influence.shape[1] > L:
+                total_influence = total_influence[:, :L, :]
+                
+            return total_influence * 0.1  # Final scaling
+            
+        except Exception as e:
+            logging.warning(f"Error applying LoRA to {block_name}: {e}")
+            return None
     
     def _create_fallback_features(self, garment_image, device, dtype):
         """Create fallback features from image statistics"""
