@@ -10,6 +10,9 @@ Usage:
     
     # Or pass it directly:
     python download_flux_models.py --hf-token "your_token"
+
+Note: If you already have a FLUX model (e.g., fp8 version), the script will
+      download the fp16 version as flux1-dev_fp16.safetensors
 """
 
 import os
@@ -19,11 +22,17 @@ from pathlib import Path
 from tqdm import tqdm
 import argparse
 
-def download_file(url, dest_path, desc=None, headers=None):
+def download_file(url, dest_path, desc=None, headers=None, force_suffix=None):
     """Download a file with progress bar"""
+    # Check if file already exists
+    if force_suffix and os.path.exists(dest_path):
+        # Add suffix to filename if original exists
+        base, ext = os.path.splitext(dest_path)
+        dest_path = f"{base}_{force_suffix}{ext}"
+    
     if os.path.exists(dest_path):
         print(f"✓ {desc or dest_path} already exists, skipping...")
-        return
+        return dest_path
     
     print(f"Downloading {desc or url}...")
     response = requests.get(url, stream=True, headers=headers)
@@ -39,6 +48,7 @@ def download_file(url, dest_path, desc=None, headers=None):
                 f.write(chunk)
     
     print(f"✓ Downloaded {desc or dest_path}")
+    return dest_path
 
 def main():
     parser = argparse.ArgumentParser(description='Download FLUX.1-dev models for ComfyUI')
@@ -80,13 +90,22 @@ def main():
         print("Get your token from: https://huggingface.co/settings/tokens")
         sys.exit(1)
     
+    # Check if fp8 model already exists
+    existing_model = diffusion_models_path / "flux1-dev.safetensors"
+    force_suffix = None
+    if existing_model.exists():
+        print(f"\nNote: Found existing model at {existing_model}")
+        print("Will download fp16 version as flux1-dev_fp16.safetensors")
+        force_suffix = "fp16"
+    
     # Files to download
     downloads = [
         # Main model - using fp16 version
         {
             "url": f"{base_url}/flux1-dev.safetensors",
             "dest": diffusion_models_path / "flux1-dev.safetensors",
-            "desc": "FLUX.1-dev model (fp16)"
+            "desc": "FLUX.1-dev model (fp16)",
+            "force_suffix": force_suffix
         },
         # VAE
         {
@@ -117,23 +136,42 @@ def main():
     print(f"Will download {len(downloads)} files...\n")
     
     # Download all files
+    downloaded_files = {}
     for item in downloads:
         try:
             # Use headers for FLUX.1-dev downloads (gated model)
             item_headers = headers if "black-forest-labs" in item["url"] else None
-            download_file(item["url"], item["dest"], item["desc"], headers=item_headers)
+            actual_path = download_file(
+                item["url"], 
+                item["dest"], 
+                item["desc"], 
+                headers=item_headers,
+                force_suffix=item.get("force_suffix")
+            )
+            if actual_path:
+                downloaded_files[item["desc"]] = actual_path
         except Exception as e:
             print(f"Error downloading {item['desc']}: {e}")
             continue
     
     print("\n✓ All downloads complete!")
     print("\nModel locations:")
-    print(f"  Diffusion model: {diffusion_models_path / 'flux1-dev.safetensors'}")
+    
+    # Show actual downloaded paths
+    if force_suffix:
+        print(f"  Diffusion model (fp16): {diffusion_models_path / 'flux1-dev_fp16.safetensors'}")
+        print(f"  Note: You already have a model at {diffusion_models_path / 'flux1-dev.safetensors'}")
+    else:
+        print(f"  Diffusion model: {diffusion_models_path / 'flux1-dev.safetensors'}")
+    
     print(f"  VAE: {vae_path / 'ae.safetensors'}")
     print(f"  CLIP encoder: {clip_path / 'clip_l.safetensors'}")
     print(f"  T5 encoder: {clip_path / 't5xxl_fp16.safetensors'}")
     
     print("\nYou can now use these models in ComfyUI with the 'Load Diffusion Model' node!")
+    
+    if force_suffix:
+        print("\nTo use the fp16 model instead of fp8, select 'flux1-dev_fp16.safetensors' in the Load Diffusion Model node.")
 
 if __name__ == "__main__":
     main()
