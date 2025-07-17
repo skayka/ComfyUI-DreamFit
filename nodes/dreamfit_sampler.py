@@ -178,6 +178,20 @@ def forward_orig_dreamfit(
     # Extract rw_mode from transformer_options
     rw_mode = transformer_options.get('rw_mode', 'normal')
     
+    # Get device from model
+    model_device = next(self.parameters()).device
+    print(f"Model device: {model_device}, img device: {img.device}")
+    
+    # Ensure inputs are on the correct device
+    img = img.to(model_device)
+    txt = txt.to(model_device)
+    y = y.to(model_device)
+    timesteps = timesteps.to(model_device)
+    if guidance is not None:
+        guidance = guidance.to(model_device)
+    img_ids = img_ids.to(model_device)
+    txt_ids = txt_ids.to(model_device)
+    
     # running on sequences img
     img = self.img_in(img)
     vec = self.time_in(timestep_embedding(timesteps, 256).to(img.dtype))
@@ -283,6 +297,10 @@ class FluxModelWrapper:
             
         self.device = device
         self.dtype = dtype
+        
+        # Ensure the model is on the correct device
+        if hasattr(self.diffusion_model, 'to'):
+            self.diffusion_model = self.diffusion_model.to(device)
         
         # Storage for DreamFit's read/write mechanism
         self.stored_features = {}
