@@ -428,13 +428,7 @@ class ApplyCustomGarmentFitV3:
             'patcher': patcher
         }
         
-        # Store reference to flux_model in blocks for easy access
-        for i in range(19):
-            if hasattr(flux_model, 'double_blocks') and i < len(flux_model.double_blocks):
-                flux_model.double_blocks[i]._flux_model_ref = flux_model
-        for i in range(38):
-            if hasattr(flux_model, 'single_blocks') and i < len(flux_model.single_blocks):
-                flux_model.single_blocks[i]._flux_model_ref = flux_model
+        # References are stored during patching in _patch_transformer_blocks
                 
         logging.info(f"✓ Added DreamFit data (id: {unique_id[:8]}) with {len(patcher.lora_layers)} LoRA layers")
         
@@ -455,6 +449,7 @@ class ApplyCustomGarmentFitV3:
                 block = flux_model.double_blocks[i]
                 if not hasattr(block, '_dreamfit_patched'):
                     original_forward = block.forward
+                    block._flux_model_ref = flux_model  # Store reference before patching
                     block.forward = self._create_enhanced_block_forward(original_forward, f"double_{i}", block)
                     block._dreamfit_patched = True
                     logging.info(f"✓ Patched double_blocks[{i}]")
@@ -465,6 +460,7 @@ class ApplyCustomGarmentFitV3:
                 block = flux_model.single_blocks[i]
                 if not hasattr(block, '_dreamfit_patched'):
                     original_forward = block.forward
+                    block._flux_model_ref = flux_model  # Store reference before patching
                     block.forward = self._create_enhanced_block_forward(original_forward, f"single_{i}", block)
                     block._dreamfit_patched = True
                     logging.info(f"✓ Patched single_blocks[{i}]")
@@ -476,12 +472,8 @@ class ApplyCustomGarmentFitV3:
             # Run original block processing
             output = original_forward(*args, **kwargs)
             
-            # Apply DreamFit LoRA if active
-            if hasattr(block, '__self__') and hasattr(block.__self__, 'dreamfit_data'):
-                flux_model = block.__self__
-            else:
-                # Find the parent model
-                flux_model = self._find_flux_model(block)
+            # Get flux_model from stored reference (avoid recursion)
+            flux_model = getattr(block, '_flux_model_ref', None)
             
             if flux_model and hasattr(flux_model, "dreamfit_data") and flux_model.dreamfit_data:
                 # Get current timestep (passed in args)
@@ -515,14 +507,6 @@ class ApplyCustomGarmentFitV3:
             return output
             
         return enhanced_forward
-    
-    def _find_flux_model(self, block):
-        """Find the parent FLUX model from a block"""
-        # This is a helper to find the model that contains dreamfit_data
-        # We'll store a reference during patching
-        if hasattr(block, '_flux_model_ref'):
-            return block._flux_model_ref
-        return None
     
     def _apply_block_lora(self, block_name, garment_embeds, patcher, weight, current_features):
         """Apply LoRA transformations for a specific block"""
