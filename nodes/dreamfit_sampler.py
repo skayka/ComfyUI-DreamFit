@@ -529,6 +529,9 @@ class DreamFitSampler:
             wrapped_model.diffusion_model.dreamfit_processors = wrapped_processors
             print(f"Loaded {len(lora_processors)} DreamFit processors")
             
+            # Prepare model structure for DreamFit
+            self._prepare_model_for_dreamfit(diffusion_model, checkpoint, device, dtype)
+            
             # Load modulation LoRA weights
             self._load_modulation_lora(diffusion_model, checkpoint)
             
@@ -781,6 +784,56 @@ class DreamFitSampler:
                     processors[name] = proc
         
         return processors
+    
+    def _prepare_model_for_dreamfit(self, model, checkpoint, device, dtype):
+        """Add required LoRA layers to model structure for DreamFit compatibility"""
+        print("Preparing model structure for DreamFit...")
+        
+        # Add img_mlp_lora layers to double blocks
+        if hasattr(model, 'double_blocks'):
+            for i, block in enumerate(model.double_blocks):
+                if hasattr(block, 'img_attn'):
+                    # Create img_mlp_lora_1 and img_mlp_lora_2
+                    block.img_attn.img_mlp_lora_1 = FixedLoRALinearLayer(
+                        in_features=3072 * 4,
+                        out_features=3072 * 4,
+                        rank=32,
+                        network_alpha=16,
+                        device=device,
+                        dtype=dtype
+                    )
+                    
+                    block.img_attn.img_mlp_lora_2 = FixedLoRALinearLayer(
+                        in_features=3072 * 4,
+                        out_features=3072,
+                        rank=32,
+                        network_alpha=16,
+                        device=device,
+                        dtype=dtype
+                    )
+                    
+                    # Load weights for these layers from checkpoint if available
+                    lora1_state = {}
+                    lora2_state = {}
+                    prefix = f"double_blocks.{i}.img_attn."
+                    
+                    for key in checkpoint:
+                        if key.startswith(prefix):
+                            if "img_mlp_lora_1" in key:
+                                # Extract parameter name after img_mlp_lora_1.
+                                param_name = key.split("img_mlp_lora_1.")[-1]
+                                lora1_state[param_name] = checkpoint[key].to(device, dtype=dtype)
+                            elif "img_mlp_lora_2" in key:
+                                # Extract parameter name after img_mlp_lora_2.
+                                param_name = key.split("img_mlp_lora_2.")[-1]
+                                lora2_state[param_name] = checkpoint[key].to(device, dtype=dtype)
+                    
+                    if lora1_state:
+                        block.img_attn.img_mlp_lora_1.load_state_dict(lora1_state, strict=False)
+                    if lora2_state:
+                        block.img_attn.img_mlp_lora_2.load_state_dict(lora2_state, strict=False)
+        
+        print("Model structure prepared for DreamFit")
     
     def _load_modulation_lora(self, model, checkpoint):
         """Load LoRA weights for modulation layers"""

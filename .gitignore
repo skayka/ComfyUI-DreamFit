@@ -190,3 +190,7 @@ input/
 # DreamFit specific cache
 .cache/
 model_cache/DreamFit-official/
+
+# Cloned repos
+PuLID_ComfyUI/
+ComfyUI-PuLID-Flux/
