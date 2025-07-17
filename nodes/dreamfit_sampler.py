@@ -30,12 +30,16 @@ from comfy.ldm.flux.layers import timestep_embedding
 
 # Import DreamFit components
 try:
+    # Import our patched processors with device support
     from flux.modules.layers_dreamfit import (
         DoubleStreamBlockLoraProcessor, 
         SingleStreamBlockLoraProcessor
     )
+    # Import the rest from original DreamFit
+    sys.path.remove(PATCHES_PATH)  # Temporarily remove patches from path
     from flux.sampling import denoise, prepare, prepare_img, prepare_txt, get_schedule, unpack
     from flux.util import load_checkpoint, get_lora_rank
+    sys.path.insert(0, PATCHES_PATH)  # Add patches back
     print("Successfully imported DreamFit components")
 except ImportError as e:
     print(f"Error importing DreamFit components: {e}")
