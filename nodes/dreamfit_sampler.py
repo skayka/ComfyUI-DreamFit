@@ -183,7 +183,9 @@ def forward_orig_dreamfit(
     model_device = model_param.device
     model_dtype = model_param.dtype
     print(f"Model device: {model_device}, dtype: {model_dtype}")
-    print(f"Input img device: {img.device}, dtype: {img.dtype}")
+    print(f"Input img shape: {img.shape}, device: {img.device}, dtype: {img.dtype}")
+    print(f"Input txt shape: {txt.shape}")
+    print(f"Input vec shape: {y.shape}")
     
     # Ensure inputs are on the correct device and dtype
     img = img.to(device=model_device, dtype=model_dtype)
@@ -524,6 +526,11 @@ class DreamFitSampler:
             
             wrapped_model.diffusion_model.dreamfit_processors = wrapped_processors
             print(f"Loaded {len(lora_processors)} DreamFit processors")
+            
+            # Debug memory usage
+            if torch.cuda.is_available():
+                print(f"GPU memory allocated: {torch.cuda.memory_allocated(device)/1024**3:.2f} GB")
+                print(f"GPU memory reserved: {torch.cuda.memory_reserved(device)/1024**3:.2f} GB")
             
             # Prepare model structure for DreamFit
             self._prepare_model_for_dreamfit(diffusion_model, checkpoint, device, dtype)
