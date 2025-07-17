@@ -40,12 +40,48 @@ except ImportError as e:
 import math
 
 
-def modulation_forward_with_rw_mode(original_forward):
-    """Wrapper to make Modulation.forward accept rw_mode parameter"""
-    def forward(self, vec, rw_mode=None):
-        # Ignore rw_mode, just call original forward
-        return original_forward(self, vec)
-    return forward
+class ProcessorWrapper:
+    """Wrapper for DreamFit processors that handles compatibility with ComfyUI's blocks"""
+    def __init__(self, processor):
+        self.processor = processor
+    
+    def __call__(self, block, *args, **kwargs):
+        # Store original methods
+        orig_img_mod = None
+        orig_txt_mod = None
+        
+        # Wrap img_mod and txt_mod to ignore rw_mode parameter
+        if hasattr(block, 'img_mod'):
+            orig_img_mod = block.img_mod
+            
+            # Create a lambda that properly handles the method call
+            block.img_mod = lambda vec, rw_mode=None: orig_img_mod(vec)
+        
+        if hasattr(block, 'txt_mod'):
+            orig_txt_mod = block.txt_mod
+            
+            # Create a lambda that properly handles the method call
+            block.txt_mod = lambda vec, rw_mode=None: orig_txt_mod(vec)
+        
+        # For single blocks, wrap modulation too
+        orig_modulation = None
+        if hasattr(block, 'modulation'):
+            orig_modulation = block.modulation
+            
+            # Create a lambda that properly handles the method call
+            block.modulation = lambda vec, rw_mode=None: orig_modulation(vec)
+        
+        try:
+            # Call the processor with wrapped block
+            return self.processor(block, *args, **kwargs)
+        finally:
+            # Restore original methods
+            if orig_img_mod is not None:
+                block.img_mod = orig_img_mod
+            if orig_txt_mod is not None:
+                block.txt_mod = orig_txt_mod
+            if orig_modulation is not None:
+                block.modulation = orig_modulation
 
 
 def forward_orig_dreamfit(
@@ -78,17 +114,19 @@ def forward_orig_dreamfit(
     
     # Process through double blocks
     for i, block in enumerate(self.double_blocks):
-        # Normal block forward
-        img, txt = block(img=img, txt=txt, vec=vec, pe=pe)
-        
-        # Apply DreamFit processor if available
+        # Check if we have a DreamFit processor for this block
         if hasattr(self, 'dreamfit_processors'):
             processor_name = f"double_blocks.{i}.processor"
             if processor_name in self.dreamfit_processors:
+                # Use DreamFit processor instead of normal forward
                 processor = self.dreamfit_processors[processor_name]
-                # Call processor with DreamFit signature
-                # Note: processor handles rw_mode internally, but the block's img_mod doesn't accept it
                 img, txt = processor(block, img, txt, vec, pe, rw_mode=rw_mode)
+            else:
+                # Normal block forward
+                img, txt = block(img=img, txt=txt, vec=vec, pe=pe)
+        else:
+            # Normal block forward
+            img, txt = block(img=img, txt=txt, vec=vec, pe=pe)
         
         # Handle controlnet if present
         if control is not None:
@@ -102,13 +140,11 @@ def forward_orig_dreamfit(
     
     # Process through single blocks
     for i, block in enumerate(self.single_blocks):
-        # Normal block forward
-        img = block(img, vec=vec, pe=pe)
-        
-        # Apply DreamFit processor if available
+        # Check if we have a DreamFit processor for this block
         if hasattr(self, 'dreamfit_processors'):
             processor_name = f"single_blocks.{i}.processor"
             if processor_name in self.dreamfit_processors:
+                # Use DreamFit processor instead of normal forward
                 processor = self.dreamfit_processors[processor_name]
                 # Extract real_img (without txt part)
                 real_img, txt_part = img[:, txt.shape[1]:, ...], img[:, :txt.shape[1], ...]
@@ -116,6 +152,12 @@ def forward_orig_dreamfit(
                 real_img = processor(block, real_img, vec, pe, rw_mode=rw_mode)
                 # Recombine
                 img = torch.cat((txt_part, real_img), 1)
+            else:
+                # Normal block forward
+                img = block(img, vec=vec, pe=pe)
+        else:
+            # Normal block forward
+            img = block(img, vec=vec, pe=pe)
         
         # Handle controlnet if present
         if control is not None:
@@ -369,26 +411,16 @@ class DreamFitSampler:
                     new_forward = forward_orig_dreamfit.__get__(wrapped_model.diffusion_model, wrapped_model.diffusion_model.__class__)
                     setattr(wrapped_model.diffusion_model, 'forward_orig', new_forward)
                     print("Patched forward_orig with DreamFit support")
-                
-                # Patch Modulation forward methods in all blocks to accept rw_mode
-                for i, block in enumerate(wrapped_model.diffusion_model.double_blocks):
-                    if hasattr(block, 'img_mod') and hasattr(block.img_mod, 'forward'):
-                        original_forward = block.img_mod.forward
-                        block.img_mod.forward = modulation_forward_with_rw_mode(original_forward).__get__(block.img_mod, block.img_mod.__class__)
-                    if hasattr(block, 'txt_mod') and hasattr(block.txt_mod, 'forward'):
-                        original_forward = block.txt_mod.forward
-                        block.txt_mod.forward = modulation_forward_with_rw_mode(original_forward).__get__(block.txt_mod, block.txt_mod.__class__)
-                
-                for i, block in enumerate(wrapped_model.diffusion_model.single_blocks):
-                    if hasattr(block, 'modulation') and hasattr(block.modulation, 'forward'):
-                        original_forward = block.modulation.forward
-                        block.modulation.forward = modulation_forward_with_rw_mode(original_forward).__get__(block.modulation, block.modulation.__class__)
-                
-                print("Patched Modulation forward methods to accept rw_mode")
             
             # Create and load processors
             lora_processors = self._create_and_load_processors(wrapped_model.diffusion_model, checkpoint, rank)
-            wrapped_model.diffusion_model.dreamfit_processors = lora_processors
+            
+            # Wrap processors to handle ComfyUI compatibility
+            wrapped_processors = {}
+            for name, processor in lora_processors.items():
+                wrapped_processors[name] = ProcessorWrapper(processor)
+            
+            wrapped_model.diffusion_model.dreamfit_processors = wrapped_processors
             print(f"Loaded {len(lora_processors)} DreamFit processors")
             
             # Load modulation LoRA weights
