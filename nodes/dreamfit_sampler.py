@@ -793,18 +793,20 @@ class DreamFitSampler:
         if hasattr(model, 'double_blocks'):
             for i, block in enumerate(model.double_blocks):
                 # Create img_mlp_lora_1 and img_mlp_lora_2 on the block itself
+                # img_mlp_lora_1: hidden_size -> mlp_hidden_dim
                 block.img_mlp_lora_1 = FixedLoRALinearLayer(
-                    in_features=3072 * 4,
-                    out_features=3072 * 4,
+                    in_features=3072,      # hidden_size
+                    out_features=3072 * 4, # mlp_hidden_dim
                     rank=32,
                     network_alpha=16,
                     device=device,
                     dtype=dtype
                 )
                 
+                # img_mlp_lora_2: mlp_hidden_dim -> hidden_size
                 block.img_mlp_lora_2 = FixedLoRALinearLayer(
-                    in_features=3072 * 4,
-                    out_features=3072,
+                    in_features=3072 * 4,  # mlp_hidden_dim
+                    out_features=3072,     # hidden_size
                     rank=32,
                     network_alpha=16,
                     device=device,
