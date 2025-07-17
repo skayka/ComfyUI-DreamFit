@@ -2,6 +2,14 @@
 """
 Download FLUX.1-dev model files for ComfyUI
 Downloads the model, VAE, and text encoders and places them in the correct ComfyUI directories
+
+Usage:
+    # Set your HF token first:
+    export HF_TOKEN="your_hugging_face_token"
+    python download_flux_models.py
+    
+    # Or pass it directly:
+    python download_flux_models.py --hf-token "your_token"
 """
 
 import os
@@ -11,14 +19,14 @@ from pathlib import Path
 from tqdm import tqdm
 import argparse
 
-def download_file(url, dest_path, desc=None):
+def download_file(url, dest_path, desc=None, headers=None):
     """Download a file with progress bar"""
     if os.path.exists(dest_path):
         print(f"✓ {desc or dest_path} already exists, skipping...")
         return
     
     print(f"Downloading {desc or url}...")
-    response = requests.get(url, stream=True)
+    response = requests.get(url, stream=True, headers=headers)
     response.raise_for_status()
     
     total_size = int(response.headers.get('content-length', 0))
@@ -36,6 +44,8 @@ def main():
     parser = argparse.ArgumentParser(description='Download FLUX.1-dev models for ComfyUI')
     parser.add_argument('--comfyui-path', type=str, default='../..',
                         help='Path to ComfyUI installation (default: ../.. for custom_nodes/ComfyUI-DreamFit)')
+    parser.add_argument('--hf-token', type=str, default=os.environ.get('HF_TOKEN'),
+                        help='Hugging Face token for gated models (or set HF_TOKEN env var)')
     args = parser.parse_args()
     
     # Base paths
@@ -60,6 +70,15 @@ def main():
     
     # HuggingFace base URL
     base_url = "https://huggingface.co/black-forest-labs/FLUX.1-dev/resolve/main"
+    
+    # Headers for authentication
+    headers = {"Authorization": f"Bearer {args.hf_token}"} if args.hf_token else None
+    
+    if not args.hf_token:
+        print("WARNING: No Hugging Face token provided. FLUX.1-dev is a gated model and requires authentication.")
+        print("Please set HF_TOKEN environment variable or use --hf-token argument.")
+        print("Get your token from: https://huggingface.co/settings/tokens")
+        sys.exit(1)
     
     # Files to download
     downloads = [
@@ -100,7 +119,9 @@ def main():
     # Download all files
     for item in downloads:
         try:
-            download_file(item["url"], item["dest"], item["desc"])
+            # Use headers for FLUX.1-dev downloads (gated model)
+            item_headers = headers if "black-forest-labs" in item["url"] else None
+            download_file(item["url"], item["dest"], item["desc"], headers=item_headers)
         except Exception as e:
             print(f"Error downloading {item['desc']}: {e}")
             continue
