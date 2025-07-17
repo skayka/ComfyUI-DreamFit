@@ -206,6 +206,61 @@ class SimpleGarmentEncoderV3(nn.Module):
         return output
 
 
+class GarmentCLIPVisionLoader:
+    """Load CLIP vision model for garment encoding (DreamFit uses standard CLIP-ViT-Large)"""
+    @classmethod
+    def INPUT_TYPES(s):
+        # List available vision models in ComfyUI/models/clip_vision/
+        vision_models = folder_paths.get_filename_list("clip_vision")
+        default_options = ["auto_download_clip_vit_large"]
+        
+        return {
+            "required": {
+                "clip_vision_model": (vision_models + default_options, ),
+            }
+        }
+    
+    RETURN_TYPES = ("GARMENT_CLIP_VISION",)
+    FUNCTION = "load_vision"
+    CATEGORY = "dreamfit"
+    
+    def load_vision(self, clip_vision_model):
+        if clip_vision_model == "auto_download_clip_vit_large":
+            # Auto-download standard CLIP (what DreamFit actually uses)
+            try:
+                from transformers import CLIPVisionModel, CLIPImageProcessor
+                
+                model_name = "openai/clip-vit-large-patch14"
+                logging.info(f"Loading CLIP vision model: {model_name}")
+                
+                vision_model = CLIPVisionModel.from_pretrained(model_name)
+                processor = CLIPImageProcessor.from_pretrained(model_name)
+                
+                return ({
+                    "model": vision_model,
+                    "processor": processor,
+                    "type": "transformers",
+                    "model_name": model_name
+                },)
+                
+            except ImportError:
+                raise ValueError("transformers not installed. Install with: pip install transformers")
+            except Exception as e:
+                raise ValueError(f"Failed to download CLIP model: {e}")
+        
+        # Load from ComfyUI's clip_vision folder
+        vision_path = folder_paths.get_full_path("clip_vision", clip_vision_model)
+        
+        # Generic CLIP vision loading
+        import comfy.clip_vision
+        clip_vision = comfy.clip_vision.load(vision_path)
+        return ({
+            "model": clip_vision, 
+            "type": "comfyui",
+            "path": vision_path
+        },)
+
+
 class CustomGarmentFitLoaderV3:
     @classmethod
     def INPUT_TYPES(s):
@@ -237,7 +292,6 @@ class ApplyCustomGarmentFitV3:
         return {
             "required": {
                 "model": ("MODEL", ),
-                "clip": ("CLIP", ),
                 "garmentfit": ("GARMENTFIT", ),
                 "garment_image": ("IMAGE", ),
                 "positive": ("CONDITIONING", ),
@@ -245,6 +299,9 @@ class ApplyCustomGarmentFitV3:
                 "weight": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 2.0, "step": 0.1}),
                 "start_at": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "end_at": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+            },
+            "optional": {
+                "garment_clip_vision": ("GARMENT_CLIP_VISION", ),
             }
         }
     
@@ -252,8 +309,8 @@ class ApplyCustomGarmentFitV3:
     FUNCTION = "apply_garmentfit"
     CATEGORY = "dreamfit"
     
-    def apply_garmentfit(self, model, clip, garmentfit, garment_image, positive, negative, 
-                        weight, start_at, end_at):
+    def apply_garmentfit(self, model, garmentfit, garment_image, positive, negative, 
+                        weight, start_at, end_at, garment_clip_vision=None):
         """Apply garment fitting with proper LoRA weights"""
         
         # Clone model
@@ -269,24 +326,66 @@ class ApplyCustomGarmentFitV3:
         # Move encoder to device
         encoder = encoder.to(device, dtype=dtype)
         
-        # Process garment image
-        # Encode garment image using CLIP vision if available
-        if hasattr(clip, 'encode_vision') and callable(clip.encode_vision):
-            # Use CLIP vision encoder
-            clip_features = clip.encode_vision(garment_image)
-            if isinstance(clip_features, tuple):
-                clip_features = clip_features[0]  # Get main features
+        # Process garment image with CLIP vision
+        if garment_clip_vision is not None:
+            try:
+                vision_model = garment_clip_vision["model"]
+                vision_type = garment_clip_vision.get("type", "comfyui")
+                
+                # Convert from ComfyUI format [B, H, W, C] to PIL
+                from PIL import Image
+                img_np = (garment_image[0].cpu().numpy() * 255).astype(np.uint8)
+                img_pil = Image.fromarray(img_np)
+                
+                if vision_type == "transformers":
+                    # Use transformers CLIP (DreamFit's approach)
+                    processor = garment_clip_vision["processor"]
+                    
+                    # Move model to device
+                    vision_model = vision_model.to(device, dtype=dtype)
+                    
+                    # Process image with official processor
+                    inputs = processor(images=img_pil, return_tensors="pt")
+                    inputs = {k: v.to(device, dtype=dtype) for k, v in inputs.items()}
+                    
+                    with torch.no_grad():
+                        outputs = vision_model(**inputs)
+                        # Use pooled output for global garment features
+                        clip_features = outputs.pooler_output  # [B, 768]
+                        
+                    logging.info(f"✓ Encoded garment with transformers CLIP: {clip_features.shape}")
+                    
+                else:
+                    # ComfyUI CLIP vision processing
+                    import torchvision.transforms as transforms
+                    
+                    # Move model to device
+                    vision_model = vision_model.to(device, dtype=dtype)
+                    
+                    # Standard CLIP preprocessing
+                    img_tensor = transforms.Compose([
+                        transforms.Resize((224, 224)),
+                        transforms.ToTensor(),
+                        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                    ])(img_pil).unsqueeze(0).to(device, dtype=dtype)
+                    
+                    with torch.no_grad():
+                        if hasattr(vision_model, 'encode_image'):
+                            clip_features = vision_model.encode_image(img_tensor)
+                        else:
+                            clip_features = vision_model(img_tensor)
+                            if hasattr(clip_features, 'pooler_output'):
+                                clip_features = clip_features.pooler_output
+                    
+                    logging.info(f"✓ Encoded garment with ComfyUI CLIP: {clip_features.shape}")
+                
+            except Exception as e:
+                logging.warning(f"Garment CLIP vision encoding failed: {e}, using fallback")
+                clip_features = self._create_fallback_features(garment_image, device, dtype)
         else:
-            # Fallback: create features from image statistics
-            # This is a simple fallback - in production, ensure CLIP vision is available
-            img_flat = garment_image.flatten(1, -1)  # [B, H*W*C]
-            img_mean = img_flat.mean(dim=1, keepdim=True)
-            img_std = img_flat.std(dim=1, keepdim=True)
-            # Create pseudo-features of dimension 1024
-            clip_features = torch.cat([
-                img_mean.expand(-1, 512),
-                img_std.expand(-1, 512)
-            ], dim=1).to(device, dtype=dtype)
+            # No dedicated CLIP vision provided, use fallback
+            logging.warning("No garment CLIP vision provided, using fallback features")
+            clip_features = self._create_fallback_features(garment_image, device, dtype)
         
         # Generate garment embeddings
         with torch.no_grad():
@@ -348,15 +447,29 @@ class ApplyCustomGarmentFitV3:
                     return optimized_attention(q, k, v, extra_options.get("n_heads", 8))
                     
         return ScheduledPatch(patch_func, sigma_start, sigma_end)
+    
+    def _create_fallback_features(self, garment_image, device, dtype):
+        """Create fallback features from image statistics"""
+        img_flat = garment_image.flatten(1, -1)  # [B, H*W*C]
+        img_mean = img_flat.mean(dim=1, keepdim=True)
+        img_std = img_flat.std(dim=1, keepdim=True)
+        # Create pseudo-features of dimension 1024
+        clip_features = torch.cat([
+            img_mean.expand(-1, 512),
+            img_std.expand(-1, 512)
+        ], dim=1).to(device, dtype=dtype)
+        return clip_features
 
 
 # Node mappings
 NODE_CLASS_MAPPINGS = {
+    "GarmentCLIPVisionLoader": GarmentCLIPVisionLoader,
     "CustomGarmentFitLoaderV3": CustomGarmentFitLoaderV3,
     "ApplyCustomGarmentFitV3": ApplyCustomGarmentFitV3,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "CustomGarmentFitLoaderV3": "Load GarmentFit V3 (Proper LoRA)",
-    "ApplyCustomGarmentFitV3": "Apply GarmentFit V3 (Proper LoRA)",
+    "GarmentCLIPVisionLoader": "Load Garment CLIP Vision",
+    "CustomGarmentFitLoaderV3": "Load GarmentFit Model",
+    "ApplyCustomGarmentFitV3": "Apply GarmentFit",
 }
