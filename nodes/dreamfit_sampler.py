@@ -669,11 +669,20 @@ class DreamFitSampler:
     
     def _load_modulation_lora(self, model, checkpoint):
         """Load LoRA weights for modulation layers"""
+        # Get device and dtype from model
+        if hasattr(model, 'parameters') and next(model.parameters(), None) is not None:
+            param = next(model.parameters())
+            device = param.device
+            dtype = param.dtype
+        else:
+            device = torch.device('cpu')
+            dtype = torch.float32
+            
         # Extract modulation LoRA weights
         modulation_state_dict = {}
         for name, param in checkpoint.items():
             if 'lin_lora' in name:
-                modulation_state_dict[name] = param
+                modulation_state_dict[name] = param.to(device, dtype=dtype)
         
         if modulation_state_dict:
             # Load into model
@@ -763,8 +772,13 @@ class DreamFitSampler:
         txt = cond_tensor  # This is the text conditioning from ComfyUI
         txt_ids = torch.zeros(batch_size, txt.shape[1], 3, device=device, dtype=dtype)
         
-        # CLIP pooled output (simplified)
-        vec = torch.mean(txt, dim=1)  # Pool over sequence dimension
+        # CLIP pooled output
+        # Check if ComfyUI provided pooled output in the conditioning dict
+        if 'pooled_output' in cond_dict:
+            vec = cond_dict['pooled_output']
+        else:
+            # Fallback: pool over sequence dimension
+            vec = torch.mean(txt, dim=1)
         
         return {
             "img": img.to(device, dtype=dtype),
