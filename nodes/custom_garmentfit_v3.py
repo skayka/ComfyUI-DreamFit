@@ -395,58 +395,111 @@ class ApplyCustomGarmentFitV3:
         sigma_start = model.get_model_object("model_sampling").percent_to_sigma(start_at)
         sigma_end = model.get_model_object("model_sampling").percent_to_sigma(end_at)
         
-        # Apply patches to model
-        self._apply_patches(work_model, patcher, garment_embeds, weight, sigma_start, sigma_end)
+        # Apply patches to model using PuLID-style direct modification
+        cleanup_func = self._apply_patches(work_model, patcher, garment_embeds, weight, sigma_start, sigma_end)
         
         return (work_model,)
     
     def _apply_patches(self, model, patcher, garment_embeds, weight, sigma_start, sigma_end):
-        """Apply attention patches to the model"""
+        """Apply DreamFit patches using PuLID-style direct model modification"""
         
-        # Get transformer options
-        to = model.model_options.get("transformer_options", {}).copy()
-        if "patches_replace" not in to:
-            to["patches_replace"] = {}
-        if "attn2" not in to["patches_replace"]:
-            to["patches_replace"]["attn2"] = {}
+        # Get the FLUX diffusion model
+        flux_model = model.model.diffusion_model
+        
+        # Generate unique ID for this node
+        import uuid
+        unique_id = str(uuid.uuid4())
+        
+        # Initialize DreamFit data storage if not exists
+        if not hasattr(flux_model, "dreamfit_data"):
+            flux_model.dreamfit_data = {}
+            flux_model.dreamfit_processors = {}
             
-        # Apply patches for double blocks (0-18)
-        for i in range(19):
-            patch_func = patcher.create_attention_patch("double", i, garment_embeds, weight)
-            if patch_func is not None:
-                block_name = f"input_blocks.{i}.1"
-                to["patches_replace"]["attn2"][block_name] = self._create_scheduled_patch(
-                    patch_func, sigma_start, sigma_end
-                )
+            # Store original forward method
+            if not hasattr(flux_model, 'forward_orig'):
+                flux_model.forward_orig = flux_model.forward
+                # Replace with our enhanced forward
+                flux_model.forward = self._create_dreamfit_forward(flux_model)
+                logging.info("✓ Replaced FLUX forward method with DreamFit version")
         
-        # Apply patches for single blocks (19-56)
-        for i in range(38):
-            patch_func = patcher.create_attention_patch("single", i, garment_embeds, weight)
-            if patch_func is not None:
-                block_name = f"middle_blocks.{i}.1"
-                to["patches_replace"]["attn2"][block_name] = self._create_scheduled_patch(
-                    patch_func, sigma_start, sigma_end
-                )
+        # Store garment data for this node
+        flux_model.dreamfit_data[unique_id] = {
+            'weight': weight,
+            'garment_embeds': garment_embeds,
+            'sigma_start': sigma_start, 
+            'sigma_end': sigma_end,
+            'patcher': patcher
+        }
         
-        model.model_options["transformer_options"] = to
-        
-    def _create_scheduled_patch(self, patch_func, sigma_start, sigma_end):
-        """Create a patch that only applies within the specified sigma range"""
-        
-        class ScheduledPatch:
-            def __init__(self, func, start, end):
-                self.func = func
-                self.sigma_start = start
-                self.sigma_end = end
+        # Create processors for blocks with LoRA weights
+        processors_created = 0
+        for lora_key, lora_layer in patcher.lora_layers.items():
+            if lora_key not in flux_model.dreamfit_processors:
+                flux_model.dreamfit_processors[lora_key] = lora_layer
+                processors_created += 1
                 
-            def __call__(self, q, k, v, extra_options):
-                sigma = extra_options.get("sigmas", [999999999.9])[0].item()
-                if self.sigma_end <= sigma <= self.sigma_start:
-                    return self.func(q, k, v, extra_options)
-                else:
-                    return optimized_attention(q, k, v, extra_options.get("n_heads", 8))
+        logging.info(f"✓ Added DreamFit data (id: {unique_id[:8]}) with {processors_created} processors")
+        
+        # Store cleanup callback
+        def cleanup():
+            if hasattr(flux_model, "dreamfit_data") and unique_id in flux_model.dreamfit_data:
+                del flux_model.dreamfit_data[unique_id]
+                logging.info(f"Cleaned up DreamFit data {unique_id[:8]}")
+        
+        return cleanup
+        
+    def _create_dreamfit_forward(self, flux_model):
+        """Create DreamFit-enhanced forward method for FLUX model"""
+        
+        def dreamfit_forward(img, img_ids, txt, txt_ids, timesteps, y, guidance=None, **kwargs):
+            """Enhanced FLUX forward with DreamFit garment injection"""
+            
+            # Call original forward method
+            if hasattr(flux_model, 'forward_orig'):
+                original_output = flux_model.forward_orig(img, img_ids, txt, txt_ids, timesteps, y, guidance, **kwargs)
+            else:
+                # Fallback to super() call
+                original_output = super(flux_model.__class__, flux_model).forward(img, img_ids, txt, txt_ids, timesteps, y, guidance, **kwargs)
+            
+            # Apply DreamFit modifications if data exists
+            if hasattr(flux_model, "dreamfit_data") and flux_model.dreamfit_data:
+                
+                # Check which nodes should be active at this timestep
+                active_data = []
+                for node_id, data in flux_model.dreamfit_data.items():
+                    sigma_start = data['sigma_start']
+                    sigma_end = data['sigma_end']
                     
-        return ScheduledPatch(patch_func, sigma_start, sigma_end)
+                    # Convert timesteps to sigma-like values for comparison
+                    current_sigma = timesteps.float().mean().item()
+                    
+                    if sigma_end <= current_sigma <= sigma_start:
+                        active_data.append(data)
+                
+                if active_data:
+                    logging.info(f"🎯 DreamFit active: {len(active_data)} nodes at sigma={current_sigma:.3f}")
+                    
+                    # Apply garment features to the output
+                    for data in active_data:
+                        weight = data['weight']
+                        garment_embeds = data['garment_embeds']
+                        patcher = data['patcher']
+                        
+                        # Simple additive modification (following PuLID pattern)
+                        # This is a simplified approach - can be enhanced later
+                        if garment_embeds.shape[-1] == original_output.shape[-1]:
+                            # Apply garment influence
+                            garment_influence = garment_embeds.mean(dim=1, keepdim=True)  # Pool over tokens
+                            garment_influence = garment_influence.expand_as(original_output[:, :garment_influence.shape[1], :])  # Match sequence length
+                            
+                            # Add garment influence to output
+                            original_output[:, :garment_influence.shape[1], :] += garment_influence * weight * 0.1
+                            
+                            logging.info(f"Applied garment influence: weight={weight}, shape={garment_influence.shape}")
+            
+            return original_output
+            
+        return dreamfit_forward
     
     def _create_fallback_features(self, garment_image, device, dtype):
         """Create fallback features from image statistics"""
