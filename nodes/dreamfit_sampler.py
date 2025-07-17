@@ -62,7 +62,7 @@ def forward_orig_dreamfit(
             raise ValueError("Didn't get guidance strength for guidance distilled model.")
         vec = vec + self.guidance_in(timestep_embedding(guidance, 256).to(img.dtype))
     
-    vec = vec + self.vector_in(y)
+    vec = vec + self.vector_in(y[:,:self.params.vec_in_dim])
     txt = self.txt_in(txt)
     
     ids = torch.cat((txt_ids, img_ids), dim=1)
