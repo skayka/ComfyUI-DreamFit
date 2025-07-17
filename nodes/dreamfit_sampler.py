@@ -38,6 +38,18 @@ except ImportError as e:
     raise
 
 import math
+import torch.nn as nn
+
+
+class ModulationWrapper(nn.Module):
+    """Wrapper that makes ComfyUI's Modulation accept DreamFit's rw_mode parameter"""
+    def __init__(self, modulation):
+        super().__init__()
+        self.modulation = modulation
+    
+    def forward(self, vec, rw_mode=None):
+        # Ignore rw_mode, just call original modulation
+        return self.modulation(vec)
 
 
 class ProcessorWrapper:
@@ -47,33 +59,24 @@ class ProcessorWrapper:
     
     def __call__(self, block, *args, **kwargs):
         # Store original methods
-        orig_img_mod = None
-        orig_txt_mod = None
+        orig_img_mod = getattr(block, 'img_mod', None)
+        orig_txt_mod = getattr(block, 'txt_mod', None)
+        orig_modulation = getattr(block, 'modulation', None)
         
-        # Wrap img_mod and txt_mod to ignore rw_mode parameter
-        if hasattr(block, 'img_mod'):
-            orig_img_mod = block.img_mod
-            
-            # Create a lambda that properly handles the method call
-            block.img_mod = lambda vec, rw_mode=None: orig_img_mod(vec)
+        # Temporarily wrap modulation methods
+        if orig_img_mod is not None:
+            block.img_mod = ModulationWrapper(orig_img_mod)
         
-        if hasattr(block, 'txt_mod'):
-            orig_txt_mod = block.txt_mod
-            
-            # Create a lambda that properly handles the method call
-            block.txt_mod = lambda vec, rw_mode=None: orig_txt_mod(vec)
+        if orig_txt_mod is not None:
+            block.txt_mod = ModulationWrapper(orig_txt_mod)
         
-        # For single blocks, wrap modulation too
-        orig_modulation = None
-        if hasattr(block, 'modulation'):
-            orig_modulation = block.modulation
-            
-            # Create a lambda that properly handles the method call
-            block.modulation = lambda vec, rw_mode=None: orig_modulation(vec)
+        if orig_modulation is not None:
+            block.modulation = ModulationWrapper(orig_modulation)
         
         try:
             # Call the processor with wrapped block
-            return self.processor(block, *args, **kwargs)
+            result = self.processor(block, *args, **kwargs)
+            return result
         finally:
             # Restore original methods
             if orig_img_mod is not None:
