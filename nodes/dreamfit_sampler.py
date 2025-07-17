@@ -364,10 +364,19 @@ class DreamFitSampler:
         if not os.path.exists(lora_path):
             raise FileNotFoundError(f"LoRA checkpoint not found: {lora_path}")
         
+        # Get device and dtype early
+        device = model_management.get_torch_device()
+        dtype = model_management.unet_dtype()
+        
         # Load LoRA checkpoint
         print(f"Loading DreamFit LoRA from: {lora_path}")
         # load_checkpoint expects (local_path, repo_id, name) - we only have local path
         checkpoint = load_checkpoint(lora_path, None, None)
+        
+        # Move all checkpoint tensors to the correct device
+        checkpoint = {k: v.to(device, dtype=dtype) if isinstance(v, torch.Tensor) else v 
+                     for k, v in checkpoint.items()}
+        
         rank = get_lora_rank(checkpoint)
         print(f"LoRA rank: {rank}")
         
@@ -385,10 +394,6 @@ class DreamFitSampler:
         
         # Store original processors
         original_processors = getattr(diffusion_model, 'attn_processors', {}).copy() if hasattr(diffusion_model, 'attn_processors') else {}
-        
-        # Get device and dtype early
-        device = model_management.get_torch_device()
-        dtype = model_management.unet_dtype()
         
         # Initialize wrapped_model outside try block
         wrapped_model = None
@@ -628,10 +633,16 @@ class DreamFitSampler:
                 if name in key and "processor" in key:
                     # Extract the part after processor
                     new_key = key.split(f"{name}.processor.")[-1]
-                    processor_state_dict[new_key] = checkpoint[key].to(device, dtype=dtype)
+                    # Checkpoint tensors are already on correct device
+                    processor_state_dict[new_key] = checkpoint[key]
             
             if processor_state_dict:
                 processor.load_state_dict(processor_state_dict, strict=False)
+            
+            # Force all parameters to correct device after loading
+            # This is needed because load_state_dict might create new tensors
+            for param in processor.parameters():
+                param.data = param.data.to(device, dtype=dtype)
             
             processors[f"{name}.processor"] = processor
         
@@ -654,10 +665,16 @@ class DreamFitSampler:
             for key in checkpoint:
                 if name in key and "processor" in key:
                     new_key = key.split(f"{name}.processor.")[-1]
-                    processor_state_dict[new_key] = checkpoint[key].to(device, dtype=dtype)
+                    # Checkpoint tensors are already on correct device
+                    processor_state_dict[new_key] = checkpoint[key]
             
             if processor_state_dict:
                 processor.load_state_dict(processor_state_dict, strict=False)
+            
+            # Force all parameters to correct device after loading
+            # This is needed because load_state_dict might create new tensors
+            for param in processor.parameters():
+                param.data = param.data.to(device, dtype=dtype)
             
             processors[f"{name}.processor"] = processor
         
@@ -693,6 +710,11 @@ class DreamFitSampler:
                 print(f"Missing modulation keys: {len(missing)}")
             if unexpected:
                 print(f"Unexpected modulation keys: {len(unexpected)}")
+            
+            # Force all model parameters to correct device after loading modulation
+            # This ensures any newly created tensors are on the right device
+            for param in model.parameters():
+                param.data = param.data.to(device, dtype=dtype)
     
     def _encode_image_to_latent(self, vae, image):
         """Encode image to latent using VAE"""
