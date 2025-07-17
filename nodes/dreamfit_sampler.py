@@ -597,7 +597,16 @@ class DreamFitSampler:
     def _create_and_load_processors(self, model, checkpoint, rank):
         """Create DreamFit processors and load their weights"""
         processors = {}
-        device = next(model.parameters()).device if hasattr(model, 'parameters') else torch.device('cpu')
+        # Get device and dtype from model
+        if hasattr(model, 'parameters') and next(model.parameters(), None) is not None:
+            param = next(model.parameters())
+            device = param.device
+            dtype = param.dtype
+        else:
+            device = torch.device('cpu')
+            dtype = torch.float32
+        
+        print(f"Creating processors on device: {device}, dtype: {dtype}")
         
         # Process all double blocks (0-18)
         for i in range(19):
@@ -615,11 +624,13 @@ class DreamFitSampler:
                 if name in key and "processor" in key:
                     # Extract the part after processor
                     new_key = key.split(f"{name}.processor.")[-1]
-                    processor_state_dict[new_key] = checkpoint[key]
+                    processor_state_dict[new_key] = checkpoint[key].to(device, dtype=dtype)
             
             if processor_state_dict:
                 processor.load_state_dict(processor_state_dict, strict=False)
-                processor.to(device, dtype=torch.bfloat16)
+            
+            # Move to correct device and dtype
+            processor.to(device, dtype=dtype)
             
             processors[f"{name}.processor"] = processor
         
@@ -638,11 +649,13 @@ class DreamFitSampler:
             for key in checkpoint:
                 if name in key and "processor" in key:
                     new_key = key.split(f"{name}.processor.")[-1]
-                    processor_state_dict[new_key] = checkpoint[key]
+                    processor_state_dict[new_key] = checkpoint[key].to(device, dtype=dtype)
             
             if processor_state_dict:
                 processor.load_state_dict(processor_state_dict, strict=False)
-                processor.to(device, dtype=torch.bfloat16)
+            
+            # Move to correct device and dtype
+            processor.to(device, dtype=dtype)
             
             processors[f"{name}.processor"] = processor
         
