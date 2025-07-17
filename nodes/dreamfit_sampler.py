@@ -91,13 +91,20 @@ class FixedLoRALinearLayer(nn.Module):
     """LoRA layer that properly handles device placement"""
     def __init__(self, in_features, out_features, rank=4, network_alpha=None, device=None, dtype=None):
         super().__init__()
-        self.down = nn.Linear(in_features, rank, bias=False, device=device, dtype=dtype)
-        self.up = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
+        # Create layers in float32 for initialization, then convert to target dtype
+        init_dtype = torch.float32 if dtype in [torch.float8_e4m3fn, torch.float8_e5m2] else dtype
+        self.down = nn.Linear(in_features, rank, bias=False, device=device, dtype=init_dtype)
+        self.up = nn.Linear(rank, out_features, bias=False, device=device, dtype=init_dtype)
         self.network_alpha = network_alpha
         self.rank = rank
         
         nn.init.normal_(self.down.weight, std=1 / rank)
         nn.init.zeros_(self.up.weight)
+        
+        # Convert to target dtype if needed
+        if dtype != init_dtype:
+            self.down = self.down.to(dtype=dtype)
+            self.up = self.up.to(dtype=dtype)
     
     def forward(self, hidden_states):
         orig_dtype = hidden_states.dtype
