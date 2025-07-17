@@ -618,6 +618,10 @@ class DreamFitSampler:
                 lora_weight=1.0
             )
             
+            # First move processor to device BEFORE loading weights
+            # This ensures all sub-modules are on the correct device
+            processor.to(device, dtype=dtype)
+            
             # Load weights for this processor
             processor_state_dict = {}
             for key in checkpoint:
@@ -628,9 +632,6 @@ class DreamFitSampler:
             
             if processor_state_dict:
                 processor.load_state_dict(processor_state_dict, strict=False)
-            
-            # Move to correct device and dtype
-            processor.to(device, dtype=dtype)
             
             processors[f"{name}.processor"] = processor
         
@@ -644,6 +645,10 @@ class DreamFitSampler:
                 lora_weight=1.0
             )
             
+            # First move processor to device BEFORE loading weights
+            # This ensures all sub-modules are on the correct device
+            processor.to(device, dtype=dtype)
+            
             # Load weights
             processor_state_dict = {}
             for key in checkpoint:
@@ -653,9 +658,6 @@ class DreamFitSampler:
             
             if processor_state_dict:
                 processor.load_state_dict(processor_state_dict, strict=False)
-            
-            # Move to correct device and dtype
-            processor.to(device, dtype=dtype)
             
             processors[f"{name}.processor"] = processor
         
