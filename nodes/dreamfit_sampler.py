@@ -14,6 +14,11 @@ DREAMFIT_PATH = os.path.join(os.path.dirname(__file__), "..", "DreamFit-official
 if DREAMFIT_PATH not in sys.path:
     sys.path.insert(0, DREAMFIT_PATH)
 
+# Add our patches to Python path (higher priority)
+PATCHES_PATH = os.path.join(os.path.dirname(__file__), "..", "dreamfit_patches")
+if PATCHES_PATH not in sys.path:
+    sys.path.insert(0, PATCHES_PATH)
+
 # ComfyUI imports
 import comfy.model_management
 import comfy.samplers
@@ -620,12 +625,11 @@ class DreamFitSampler:
                 dim=3072,
                 rank=rank,
                 network_alpha=16,
-                lora_weight=1.0
+                lora_weight=1.0,
+                device=device,
+                dtype=dtype
             )
             
-            # First move processor to device BEFORE loading weights
-            # This ensures all sub-modules are on the correct device
-            processor.to(device, dtype=dtype)
             
             # Load weights for this processor
             processor_state_dict = {}
@@ -653,12 +657,11 @@ class DreamFitSampler:
                 dim=3072,
                 rank=rank,
                 network_alpha=16,
-                lora_weight=1.0
+                lora_weight=1.0,
+                device=device,
+                dtype=dtype
             )
             
-            # First move processor to device BEFORE loading weights
-            # This ensures all sub-modules are on the correct device
-            processor.to(device, dtype=dtype)
             
             # Load weights
             processor_state_dict = {}
