@@ -332,6 +332,9 @@ class DreamFitSampler:
         # Store original processors
         original_processors = getattr(diffusion_model, 'attn_processors', {}).copy() if hasattr(diffusion_model, 'attn_processors') else {}
         
+        # Initialize wrapped_model outside try block
+        wrapped_model = None
+        
         try:
             # Apply DreamFit processors using PuLID-style patching
             print("Applying DreamFit processors...")
@@ -524,7 +527,7 @@ class DreamFitSampler:
         finally:
             # Always restore original processors and forward_orig
             print("Restoring original model state...")
-            if hasattr(wrapped_model.diffusion_model, 'dreamfit_processors'):
+            if wrapped_model and hasattr(wrapped_model.diffusion_model, 'dreamfit_processors'):
                 # Clear our processors
                 wrapped_model.diffusion_model.dreamfit_processors = {}
             
