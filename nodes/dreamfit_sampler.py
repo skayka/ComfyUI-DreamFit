@@ -332,6 +332,10 @@ class DreamFitSampler:
         # Store original processors
         original_processors = getattr(diffusion_model, 'attn_processors', {}).copy() if hasattr(diffusion_model, 'attn_processors') else {}
         
+        # Get device and dtype early
+        device = model_management.get_torch_device()
+        dtype = model_management.unet_dtype()
+        
         # Initialize wrapped_model outside try block
         wrapped_model = None
         
@@ -364,10 +368,6 @@ class DreamFitSampler:
             
             # Load modulation LoRA weights
             self._load_modulation_lora(diffusion_model, checkpoint)
-            
-            # Get device and dtype
-            device = model_management.get_torch_device()
-            dtype = model_management.unet_dtype()
             
             # Prepare inputs for DreamFit
             print("Preparing inputs...")
