@@ -178,19 +178,22 @@ def forward_orig_dreamfit(
     # Extract rw_mode from transformer_options
     rw_mode = transformer_options.get('rw_mode', 'normal')
     
-    # Get device from model
-    model_device = next(self.parameters()).device
-    print(f"Model device: {model_device}, img device: {img.device}")
+    # Get device and dtype from model
+    model_param = next(self.parameters())
+    model_device = model_param.device
+    model_dtype = model_param.dtype
+    print(f"Model device: {model_device}, dtype: {model_dtype}")
+    print(f"Input img device: {img.device}, dtype: {img.dtype}")
     
-    # Ensure inputs are on the correct device
-    img = img.to(model_device)
-    txt = txt.to(model_device)
-    y = y.to(model_device)
-    timesteps = timesteps.to(model_device)
+    # Ensure inputs are on the correct device and dtype
+    img = img.to(device=model_device, dtype=model_dtype)
+    txt = txt.to(device=model_device, dtype=model_dtype)
+    y = y.to(device=model_device, dtype=model_dtype)
+    timesteps = timesteps.to(device=model_device, dtype=model_dtype)
     if guidance is not None:
-        guidance = guidance.to(model_device)
-    img_ids = img_ids.to(model_device)
-    txt_ids = txt_ids.to(model_device)
+        guidance = guidance.to(device=model_device, dtype=model_dtype)
+    img_ids = img_ids.to(device=model_device, dtype=model_dtype)
+    txt_ids = txt_ids.to(device=model_device, dtype=model_dtype)
     
     # running on sequences img
     img = self.img_in(img)
