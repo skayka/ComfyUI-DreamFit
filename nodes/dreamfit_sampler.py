@@ -243,12 +243,8 @@ def forward_orig_dreamfit(
             if processor_name in self.dreamfit_processors:
                 # Use DreamFit processor instead of normal forward
                 processor = self.dreamfit_processors[processor_name]
-                # Extract real_img (without txt part)
-                real_img, txt_part = img[:, txt.shape[1]:, ...], img[:, :txt.shape[1], ...]
-                # Call processor on real_img only
-                real_img = processor(block, real_img, vec, pe, rw_mode=rw_mode)
-                # Recombine
-                img = torch.cat((txt_part, real_img), 1)
+                # SingleStreamBlock processor expects full [txt, img] sequence
+                img = processor(block, img, vec, pe, rw_mode=rw_mode)
             else:
                 # Normal block forward
                 img = block(img, vec=vec, pe=pe)
