@@ -1,318 +1,109 @@
 # ComfyUI-DreamFit
 
-Garment-centric human generation nodes for ComfyUI using DreamFit with Flux.
+Custom nodes for garment-centric human generation in ComfyUI using DreamFit's trained models.
 
+## Overview
 
-DreamFit is a powerful adapter system that enhances Flux models with garment-aware generation capabilities, enabling high-quality fashion and clothing generation.
-
-## Features
-
-- 🎨 **Garment-Centric Generation**: Generate humans wearing specific garments with high fidelity
-- 👗 **Virtual Try-On**: Try different garments on models
-- 🎭 **Pose Control**: Generate with specific poses while maintaining garment details
-- 🔧 **Flux Integration**: Seamlessly works with Flux models in ComfyUI
-- ⚡ **Adaptive Attention**: Smart injection of garment features into the generation process
-- 🎯 **LoRA Adaptation**: Efficient model adaptation without full fine-tuning
+This implementation adapts [DreamFit](https://github.com/bytedance/DreamFit) weights for use in ComfyUI, using a PuLID-inspired architecture that:
+- Properly loads and applies DreamFit's trained LoRA weights
+- Uses single-pass attention injection (simpler than DreamFit's two-pass)
+- Integrates seamlessly with ComfyUI's model system
 
 ## Installation
 
-### Prerequisites
-- ComfyUI installed and working
-- Python 3.8 or higher
-- Git (for installation method 1)
-
-### Method 1: Git Clone (Recommended)
+1. Clone this repository to your ComfyUI custom_nodes folder:
 ```bash
-# Navigate to your ComfyUI custom nodes directory
 cd ComfyUI/custom_nodes
-
-# Clone the repository
-git clone https://github.com/skayka/ComfyUI-DreamFit.git
-
-# Navigate to the installed directory
-cd ComfyUI-DreamFit
-
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Optional: Download models (do this after restarting ComfyUI)
-python download_models.py
+git clone https://github.com/yourusername/ComfyUI-DreamFit
 ```
 
-### Method 2: ComfyUI Manager
-If you have [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager) installed:
-1. Open ComfyUI Manager
-2. Search for "DreamFit"
-3. Click Install
-4. Restart ComfyUI
-
-### Method 3: Manual Installation
-1. Download the repository as ZIP
-2. Extract to `ComfyUI/custom_nodes/ComfyUI-DreamFit`
-3. Open a terminal in the extracted directory
-4. Install requirements:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Download Models
-After installation, download the required DreamFit models:
-
+2. Install requirements:
 ```bash
-# Navigate to the ComfyUI-DreamFit directory
-cd ComfyUI/custom_nodes/ComfyUI-DreamFit
-
-# Download all models (855MB total)
-python download_models.py
-
-# Or download specific models
-python download_models.py --model flux_i2i
-python download_models.py --model flux_tryon
-
-# List available models
-python download_models.py --list
-
-# Verify downloaded models
-python download_models.py --verify
+cd ComfyUI-DreamFit
+pip install -r requirements.txt
 ```
 
-The models will be automatically downloaded to:
-- If inside ComfyUI: `ComfyUI/models/dreamfit/`
-- Otherwise: `./dreamfit_models/`
+3. Download DreamFit checkpoint:
+```bash
+# Download flux_i2i.bin from DreamFit and place it in:
+ComfyUI/models/dreamfit/flux_i2i.bin
+```
 
-### Troubleshooting Installation
+## Nodes
 
-#### "No module named 'folder_paths'" during install
-This is normal! The installation will complete successfully. This error only appears because the installer tries to verify the installation outside of ComfyUI.
+### Load GarmentFit Model
+Loads the DreamFit checkpoint and prepares it for use.
+- **Input**: checkpoint path (select flux_i2i.bin)
+- **Output**: GARMENTFIT model
 
-#### Models not found
-1. Make sure you've downloaded the models using `python download_models.py`
-2. Check that models are in `ComfyUI/models/dreamfit/`
-3. Restart ComfyUI after downloading models
+### Apply GarmentFit
+Applies garment features to your generation.
+- **Inputs**:
+  - `model`: Your base FLUX model
+  - `clip`: CLIP model for encoding
+  - `garmentfit`: The loaded GarmentFit model
+  - `garment_image`: The garment image to apply
+  - `positive/negative`: Your text conditioning
+  - `weight`: Strength of garment influence (0.0-2.0, default 0.8)
+  - `start_at/end_at`: When to apply garment influence (0.0-1.0)
+- **Output**: Modified MODEL
 
-#### Import errors in ComfyUI
-1. Make sure you've installed requirements: `pip install -r requirements.txt`
-2. Restart ComfyUI after installation
-3. Check the ComfyUI console for specific error messages
+## Usage
 
-## Available Nodes
+1. Load your FLUX checkpoint and CLIP model as usual
+2. Load the GarmentFit model using "Load GarmentFit Model" node
+3. Connect everything to "Apply GarmentFit" node
+4. Use the output model in your KSampler
 
-### 1. DreamFit Checkpoint Loader
-Loads DreamFit model checkpoints and initializes the Anything-Dressing Encoder.
-
-**Inputs:**
-- `model_name`: Choose from available DreamFit models
-- `device`: Processing device (cuda/cpu)
-- `dtype`: Model precision (fp16/bf16/fp32)
-
-**Outputs:**
-- `DREAMFIT_MODEL`: The loaded model configuration
-- `DREAMFIT_ENCODER`: The Anything-Dressing Encoder
-- `DREAMFIT_CONFIG`: Model configuration
-
-### 2. DreamFit Encode
-Encodes garment images and text prompts into conditioning for generation.
-
-**Inputs:**
-- `encoder`: From checkpoint loader
-- `garment_image`: The garment to generate
-- `positive_prompt`: Description of desired output
-- `negative_prompt`: What to avoid in generation
-- `model_image` (optional): Reference pose/model
-- `garment_description`: Brief garment description
-- `garment_category`: Type of garment (casual/formal/sportswear/traditional)
-- `enhance_prompt`: Auto-enhance prompts
-- `use_model_parse`: Parse model image for better results
-- `injection_strength`: Control garment influence (0.1-2.0)
-
-**Outputs:**
-- `conditioning`: DreamFit conditioning for sampling
-- `enhanced_prompt`: Improved positive prompt
-- `enhanced_negative`: Improved negative prompt
-
-### 3. DreamFit Flux Adapter V2
-Applies DreamFit adaptation to a Flux model with CLIP integration.
-
-**Inputs:**
-- `model`: Your Flux model
-- `clip`: CLIP model for text encoding
-- `dreamfit_conditioning`: From encode node
-- `positive`: Enhanced positive prompt
-- `negative`: Enhanced negative prompt
-- `lora_strength`: LoRA adaptation strength (0.0-2.0)
-- `injection_strength`: Feature injection strength (0.0-2.0)
-- `lora_merge_mode`: How to merge LoRA weights
-- `injection_mode`: Attention injection strategy
-- `attention_mode`: Which attention layers to modify
-- `use_cached_embeddings`: Speed optimization
-
-**Outputs:**
-- `model`: Flux model with DreamFit adaptation
-- `positive`: Positive conditioning
-- `negative`: Negative conditioning
-
-### 4. DreamFit K-Sampler
-Custom sampler optimized for DreamFit generation.
-
-**Inputs:**
-- Standard KSampler inputs (model, seed, steps, cfg, etc.)
-- `dreamfit_conditioning`: From encode node
-
-**Outputs:**
-- `LATENT`: Generated image latent
-
-### 5. DreamFit Unified
-Complete DreamFit integration in a single node.
-
-**Inputs:**
-- `model`: Flux diffusion model (from UNETLoader)
-- `positive/negative`: Pre-encoded conditioning from CLIP
-- `garment_image`: Garment to process
-- `dreamfit_model`: Select model type
-- `strength`: Overall adaptation strength
-- `model_image` (optional): Reference pose for try-on
-- `injection_strength`: Garment feature strength
-- `injection_mode`: Feature injection strategy
-
-**Outputs:**
-- `model`: Enhanced Flux model
-- `positive/negative`: Enhanced conditioning
-- `debug_garment`: Processed garment (224x224) for debugging
-
-### 6. DreamFit Simple
-All-in-one node for easy DreamFit generation.
-
-**Inputs:**
-- `model`: Flux model
-- `clip`: CLIP model
-- `vae`: VAE model
-- `dreamfit_model`: Select DreamFit model
-- `garment_image`: Garment to generate
-- `positive/negative`: Text prompts
-- `seed`, `steps`, `cfg`, `denoise`: Standard generation parameters
-- `model_image` (optional): Reference model/pose
-
-**Outputs:**
-- `samples`: Generated latent image
-
-### 7. DreamFit Sampler (NEW)
-Single node implementation that directly uses the official DreamFit code for maximum compatibility.
-
-**Inputs:**
-- `model`: Flux model (from CheckpointLoaderSimple)
-- `positive/negative`: Conditioning from CLIPTextEncode
-- `latent_image`: Starting latent (from EmptyLatentImage)
-- `garment_image`: The garment to generate
-- `mode`: Generation mode (garment_generation/pose_control/virtual_tryon)
-- `seed`, `steps`, `cfg`: Standard sampling parameters
-- `sampler_name`, `scheduler`: Sampling algorithm options
-- `lora_path` (optional): Custom path to LoRA checkpoint
-
-**Outputs:**
-- `samples`: Generated latent (connect to VAEDecode)
-
-**Features:**
-- Direct integration with official DreamFit implementation
-- Automatic LoRA selection based on mode
-- Two-pass sampling with garment feature injection
-- Full compatibility with original DreamFit behavior
-
-### 8. DreamFit Sampler Advanced
-Advanced sampler with additional controls.
-
-**Features:**
-- Noise modes: default, garment_aware, structured
-- Injection schedules: constant, linear, cosine, step
-- Step control for multi-stage generation
-
-## Workflow Examples
-
-Four example workflows are included in the `workflows/` directory:
-
-### 1. Simple Workflow (`dreamfit_simple_workflow.json`)
-- Uses the all-in-one **DreamFit Simple** node
-- Minimal setup required
-- Best for quick testing and basic generation
-
-### 2. Basic Workflow (`dreamfit_basic_workflow.json`)
-- Full node setup with individual components
-- More control over the generation process
-- Good balance of simplicity and flexibility
-
-### 3. Advanced Workflow (`dreamfit_advanced_workflow.json`)
-- Complete setup with all advanced features
-- Virtual try-on with model images
-- Advanced sampling strategies
-- Maximum control and customization
-
-### Loading Workflows
-1. Open ComfyUI
-2. Click "Load" in the menu
-3. Navigate to `ComfyUI/custom_nodes/ComfyUI-DreamFit/workflows/`
-4. Select the desired workflow JSON file
-
-### 4. Unified Workflow (`dreamfit_unified_workflow.json`)
-- Uses the new **DreamFit Unified** node
-- Proper Flux model loading (UNETLoader, DualCLIPLoader, VAELoader)
-- Shows debug output of processed garment
-- Best for understanding the complete pipeline
-
-## Tips for Best Results
-
-1. **Image Quality**: Use high-quality garment images with clean backgrounds
-2. **Prompts**: Be specific about the desired style and context
-3. **Injection Strength**: Start with 0.5 and adjust based on results
-4. **Sampling Steps**: 20-30 steps usually sufficient
-5. **CFG Scale**: 7-8 works well for most cases
-
-## Model Information
-
-| Model | Size | Description | Best For |
-|-------|------|-------------|----------|
-| flux_i2i | 284MB | Basic garment generation | General fashion images |
-| flux_i2i_with_pose | 284MB | Pose-controlled generation | Specific poses/positions |
-| flux_tryon | 287MB | Virtual try-on | Trying clothes on models |
-
-## Troubleshooting
-
-### "No module named 'dreamfit_core'"
-- Ensure you're in the correct directory when installing
-- Try `python -m pip install -e .` from the ComfyUI-DreamFit directory
-
-### Models not downloading
-- Check internet connection
-- Try running with specific model: `python download_models.py --model flux_i2i`
-- Manually download from [HuggingFace](https://huggingface.co/bytedance-research/Dreamfit) and place in `ComfyUI/models/dreamfit/`
-
-### Out of memory errors
-- Reduce batch size to 1
-- Use CPU offloading in ComfyUI settings
-- Try the fp16 versions of models
+Example workflow:
+```
+[Load Checkpoint] → [Load CLIP]
+                          ↓
+[Load GarmentFit Model] → [Apply GarmentFit] → [KSampler] → [VAE Decode]
+                          ↑
+                    [Load Image]
+```
 
 ## Technical Details
 
-DreamFit uses:
-- **Anything-Dressing Encoder**: 83.4M parameter encoder for garment features
-- **Adaptive Attention Injection**: Injects garment features into Flux attention layers
-- **LoRA Adaptation**: Efficient 16-rank LoRA for model adaptation
+This implementation:
+- Extracts LoRA weights from DreamFit's checkpoint (down/up weight pairs)
+- Creates proper attention patches for K,V projections
+- Injects garment tokens into the attention mechanism
+- Supports scheduling (start_at/end_at) for fine control
+
+### Architecture
+
+The key innovation is properly using DreamFit's trained LoRA weights:
+
+1. **Weight Loading**: Parses the checkpoint to find all LoRA down/up weight pairs
+2. **LoRA Application**: Combines down/up weights to create effective transformations
+3. **Attention Patching**: Injects garment K,V into attention layers
+4. **Scheduling**: Only applies within specified timestep range
+
+### Performance
+
+- Memory efficient: Only loads necessary weights
+- Fast inference: Single-pass instead of two-pass
+- Compatible with all FLUX models and samplers
+
+## Troubleshooting
+
+### Models not found
+Ensure `flux_i2i.bin` is in `ComfyUI/models/dreamfit/`
+
+### Out of memory
+- Reduce batch size
+- Lower the weight parameter
+- Use fewer sampling steps
+
+### No effect
+- Increase weight parameter
+- Check that garment image is clear with good contrast
+- Ensure start_at < end_at
 
 ## Credits
 
-- Original DreamFit: [ByteDance Research](https://github.com/bytedance/DreamFit)
-- ComfyUI: [comfyanonymous](https://github.com/comfyanonymous/ComfyUI)
-
-## License
-
-This project follows the same license as the original DreamFit implementation.
-
-## Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request
-
-## Support
-
-- Report issues on [GitHub Issues](https://github.com/skayka/ComfyUI-DreamFit/issues)
-- Join the discussion in ComfyUI Discord
+- Original DreamFit by ByteDance Research
+- Architecture inspired by PuLID
+- Built for ComfyUI
